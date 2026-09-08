@@ -5,6 +5,7 @@ This module contains tools for retrieving and managing athlete activities.
 """
 
 from datetime import datetime, timedelta
+import json
 from typing import Any
 
 from intervals_mcp_server.api.client import make_intervals_request
@@ -256,6 +257,8 @@ async def get_activity_streams(
     activity_id: str,
     api_key: str | None = None,
     stream_types: str | None = None,
+    start_index: int | None = None,
+    end_index: int | None = None,
 ) -> str:
     """Get stream data for a specific activity from Intervals.icu
 
@@ -268,7 +271,15 @@ async def get_activity_streams(
         stream_types: Comma-separated list of stream types to retrieve (optional, defaults to all available types)
                      Available types: time, watts, heartrate, cadence, altitude, distance,
                      core_temperature, skin_temperature, velocity_smooth
+        start_index: Optional inclusive start index for an exact full-data JSON range.
+        end_index: Optional exclusive end index; provide together with start_index.
+                    Without a range this returns the compact first/last-five preview.
     """
+    if (start_index is None) != (end_index is None):
+        return "Error: start_index and end_index must be provided together."
+    if start_index is not None and (start_index < 0 or end_index is None or end_index <= start_index):
+        return "Error: require 0 <= start_index < end_index."
+
     # Build query parameters
     params = {}
     if stream_types:
@@ -298,7 +309,34 @@ async def get_activity_streams(
     if not streams:
         return f"No stream data found for activity {activity_id}."
 
-    # Format the streams data
+    if start_index is not None and end_index is not None:
+        if any(not isinstance(stream, dict) or end_index > len(stream.get("data") or []) for stream in streams):
+            return "Error: requested range exceeds one or more stream lengths."
+        payload = []
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            data = stream.get("data") or []
+            if stream.get("data2") and end_index > len(stream["data2"]):
+                return "Error: requested range exceeds one or more stream lengths."
+            selected = {
+                "type": stream.get("type", "unknown"),
+                "name": stream.get("name", stream.get("type", "unknown")),
+                "valueType": stream.get("valueType"),
+                "total_points": len(data),
+                "range": {"start_index": start_index, "end_index": end_index},
+                "data": data[start_index:end_index],
+            }
+            if stream.get("data2"):
+                selected["data2"] = stream["data2"][start_index:end_index]
+            for key in ("valueTypeIsArray", "anomalies", "custom"):
+                if key in stream:
+                    selected[key] = stream[key]
+            payload.append(selected)
+        return json.dumps({"activity_id": activity_id, "start_index": start_index,
+                           "end_index": end_index, "streams": payload}, ensure_ascii=False)
+
+    # Format the streams data (compact preview for conversational use)
     streams_summary = f"Activity Streams for {activity_id}:\n\n"
 
     for stream in streams:

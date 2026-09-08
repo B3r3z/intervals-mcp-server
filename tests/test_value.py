@@ -28,6 +28,7 @@ def test_str_ramp_percent_ftp():
     ("MINS_KM", ValueUnits.MINS_KM),
     ("MINS_MILE", ValueUnits.MINS_MILE),
     ("SECS_100M", ValueUnits.SECS_100M),
+    ("SECS_100Y", ValueUnits.SECS_100Y),
     ("SECS_500M", ValueUnits.SECS_500M),
 ])
 def test_pace_units_deserialise_from_api_string(unit_str, expected_enum):

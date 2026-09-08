@@ -5,6 +5,7 @@ This module contains tools for retrieving, creating, updating, and deleting athl
 """
 
 import json
+from collections import Counter
 from datetime import datetime
 from typing import Any
 
@@ -34,32 +35,33 @@ def _prepare_event_data(  # pylint: disable=too-many-arguments,too-many-position
     Many arguments are required to match the Intervals.icu API event structure.
     """
     resolved_workout_type = resolve_activity_type(name, workout_type)
-    return {
+    data: dict[str, Any] = {
         "start_date_local": start_date + "T00:00:00",
         "category": "WORKOUT",
         "name": name,
         "description": str(workout_doc) if workout_doc else None,
         "type": resolved_workout_type,
-        "moving_time": moving_time,
-        "distance": distance,
     }
+    if moving_time is not None:
+        data["moving_time"] = moving_time
+    if distance is not None:
+        data["distance"] = distance
+    return data
 
 
-def _handle_event_response(
-    result: dict[str, Any] | list[dict[str, Any]] | None,
-    action: str,
-    athlete_id: str,
-    start_date: str,
-) -> str:
-    """Handle API response and format appropriate message."""
-    if isinstance(result, dict) and "error" in result:
-        error_message = result.get("message", "Unknown error")
-        return f"Error {action} event: {error_message}"
-    if not result:
-        return f"No events {action} for athlete {athlete_id}."
-    if isinstance(result, dict):
-        return f"Successfully {action} event id: {result.get('id')}"
-    return f"Event {action} successfully at {start_date}"
+def _timed_steps_duration(steps: list[dict[str, Any]]) -> int | None:
+    total = 0
+    for step in steps:
+        if "steps" in step:
+            nested = _timed_steps_duration(step["steps"])
+            if nested is None:
+                return None
+            total += nested * int(step.get("reps", 1))
+        elif step.get("duration") is not None:
+            total += int(step["duration"])
+        else:
+            return None
+    return total
 
 
 async def _delete_events_list(
@@ -164,7 +166,7 @@ async def get_event_by_id(
 
     # Call the Intervals.icu API
     result = await make_intervals_request(
-        url=f"/athlete/{athlete_id_to_use}/event/{event_id}", api_key=api_key
+        url=f"/athlete/{athlete_id_to_use}/events/{event_id}", api_key=api_key
     )
 
     if isinstance(result, dict) and "error" in result:
@@ -236,8 +238,14 @@ async def delete_events_by_date_range(
     end_date: str,
     athlete_id: str | None = None,
     api_key: str | None = None,
+    confirm: bool = False,
+    expected_event_ids: list[str] | None = None,
 ) -> str:
-    """Delete events for an athlete from Intervals.icu in the specified date range.
+    """Preview, then optionally delete events in a date range.
+
+    The default is a read-only JSON preview. Deletion requires ``confirm=True``
+    and an exact ``expected_event_ids`` list matching the freshly read events;
+    any change or duplicate mismatch fails closed.
 
     Args:
         athlete_id: The Intervals.icu athlete ID (optional, will use ATHLETE_ID from .env if not provided)
@@ -245,6 +253,15 @@ async def delete_events_by_date_range(
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
     """
+    try:
+        start = validate_date(start_date)
+        end = validate_date(end_date)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    if start > end:
+        return "Error: start_date must be on or before end_date."
+    if confirm and expected_event_ids is None:
+        return "Error: expected_event_ids is required when confirm=True."
     athlete_id_to_use, error_msg = resolve_athlete_id(athlete_id, config.athlete_id)
     if error_msg:
         return error_msg
@@ -255,6 +272,17 @@ async def delete_events_by_date_range(
     if error_msg:
         return error_msg
 
+    if any(event.get("id") is None for event in events):
+        return "Error: fetched event without an ID; no events deleted."
+    actual_ids = [str(event["id"]) for event in events]
+    change_set = [{"id": str(event["id"]), "start_date_local": event.get("start_date_local", event.get("date")),
+                   "category": event.get("category"), "name": event.get("name")} for event in events]
+    if not confirm:
+        return json.dumps({"mode": "preview", "start_date": start, "end_date": end,
+                           "events": change_set, "count": len(actual_ids)}, indent=2)
+    expected = [str(event_id) for event_id in expected_event_ids or []]
+    if Counter(actual_ids) != Counter(expected):
+        return f"Error: event set changed; expected {expected}, found {actual_ids}. No events deleted."
     failed_events = await _delete_events_list(athlete_id_to_use, api_key, events)
     deleted_count = len(events) - len(failed_events)
     return f"Deleted {deleted_count} events. Failed to delete {len(failed_events)} events: {failed_events}"
@@ -346,11 +374,19 @@ async def add_or_update_event(  # pylint: disable=too-many-arguments,too-many-po
 
     try:
         validated_date = validate_date(start_date)
+        if workout_doc and workout_doc.steps and (moving_time is not None or distance is not None):
+            raise ValueError("workout_doc.steps cannot be combined with moving_time or distance")
+        expected_duration = None
+        if workout_doc and workout_doc.steps:
+            expected_duration = _timed_steps_duration([step.to_dict() for step in workout_doc.steps])
         event_data = _prepare_event_data(
-            name, workout_type, validated_date, workout_doc, moving_time, distance
+            name, workout_type, validated_date, workout_doc,
+            None if workout_doc and workout_doc.steps else moving_time,
+            None if workout_doc and workout_doc.steps else distance,
         )
         return await _create_or_update_event_request(
-            athlete_id_to_use, api_key, event_data, validated_date, event_id
+            athlete_id_to_use, api_key, event_data, event_id,
+            expected_duration=expected_duration,
         )
     except ValueError as e:
         return f"Error: {e}"
@@ -394,9 +430,7 @@ async def add_or_update_note(
             "color": color
         }
 
-        return await _create_or_update_event_request(
-            athlete_id_to_use, api_key, event_data, validated_date, event_id
-        )
+        return await _create_or_update_event_request(athlete_id_to_use, api_key, event_data, event_id)
     except ValueError as e:
         return f"Error: {e}"
 
@@ -405,8 +439,8 @@ async def _create_or_update_event_request(
     athlete_id: str,
     api_key: str | None,
     event_data: dict[str, Any],
-    start_date: str,
     event_id: str | None,
+    expected_duration: int | None = None,
 ) -> str:
     """Create or update an event via API request.
 
@@ -414,7 +448,6 @@ async def _create_or_update_event_request(
         athlete_id: The athlete ID.
         api_key: Optional API key.
         event_data: Prepared event data dictionary.
-        start_date: Start date string for response formatting.
         event_id: Optional event ID for updates.
 
     Returns:
@@ -430,4 +463,24 @@ async def _create_or_update_event_request(
         method="PUT" if event_id else "POST",
     )
     action = "updated" if event_id else "created"
-    return _handle_event_response(result, action, athlete_id, start_date)
+    if isinstance(result, dict) and result.get("error"):
+        return f"Error {action} event: {result.get('message', 'Unknown error')}"
+    if not isinstance(result, dict) or not result.get("id"):
+        return f"Error {action} event: response did not contain an event id."
+    for field in ("category", "name", "start_date_local"):
+        expected = event_data.get(field)
+        actual = result.get(field)
+        if expected is not None and actual != expected:
+            return f"Error {action} event: response field {field} mismatch."
+    if event_data.get("category") == "WORKOUT" and result.get("type") != event_data.get("type"):
+        return f"Error {action} event: response field type mismatch."
+    returned_duration = result.get("moving_time")
+    if isinstance(result.get("workout_doc"), dict):
+        returned_duration = result["workout_doc"].get("duration")
+    if returned_duration is None:
+        returned_duration = result.get("duration")
+    if expected_duration is None:
+        expected_duration = event_data.get("moving_time")
+    if expected_duration is not None and returned_duration != expected_duration:
+        return f"Error {action} event: response duration mismatch."
+    return f"Successfully {action} event id: {result['id']}"

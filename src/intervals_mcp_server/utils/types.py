@@ -92,6 +92,7 @@ class ValueUnits(Enum):
     MINS_KM = "MINS_KM"
     MINS_MILE = "MINS_MILE"
     SECS_100M = "SECS_100M"
+    SECS_100Y = "SECS_100Y"
     SECS_500M = "SECS_500M"
 
 
@@ -164,6 +165,17 @@ class Value:
         return cls.from_dict(json.loads(json_str))
 
     def _format_value(self, value: float) -> str:
+        if self.units in [ValueUnits.MINS_KM, ValueUnits.MINS_MILE]:
+            minutes = int(value)
+            seconds = round((value - minutes) * 60)
+            if seconds == 60:
+                minutes, seconds = minutes + 1, 0
+            suffix = "/km" if self.units == ValueUnits.MINS_KM else "/mi"
+            return f"{minutes}:{seconds:02d}{suffix}"
+        if self.units in [ValueUnits.SECS_100M, ValueUnits.SECS_100Y, ValueUnits.SECS_500M]:
+            seconds = round(value)
+            suffix = {ValueUnits.SECS_100M: "/100m", ValueUnits.SECS_100Y: "/100y", ValueUnits.SECS_500M: "/500m"}[self.units]
+            return f"{seconds // 60}:{seconds % 60:02d}{suffix}"
         if self.units in [
             ValueUnits.PERCENT_HR,
             ValueUnits.PERCENT_MMP,
@@ -192,6 +204,11 @@ class Value:
             ValueUnits.PERCENT_FTP: "ftp",
             ValueUnits.POWER_ZONE: "W",
             ValueUnits.CADENCE: "Cadence",
+            ValueUnits.MINS_KM: "Pace",
+            ValueUnits.MINS_MILE: "Pace",
+            ValueUnits.SECS_100M: "Pace",
+            ValueUnits.SECS_100Y: "Pace",
+            ValueUnits.SECS_500M: "Pace",
         }
         if self.units is None:
             return ""

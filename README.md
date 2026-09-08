@@ -252,14 +252,14 @@ Once the server is running and Claude Desktop is configured, you can use the fol
 - `get_activities`: Retrieve a list of activities
 - `get_activity_details`: Get detailed information for a specific activity
 - `get_activity_intervals`: Get detailed interval data for a specific activity
-- `get_activity_streams`: Get raw data streams (power, heart rate, etc.) for a specific activity
+- `get_activity_streams`: Get compact stream previews by default; pass inclusive `start_index` and exclusive `end_index` together for exact full samples in a JSON range.
 - `get_athlete_power_curves`: Get best power output curves for selected durations and time periods
 - `get_wellness_data`: Fetch wellness data
 - `get_events`: Retrieve upcoming events (workouts, races, etc.)
 - `get_event_by_id`: Get detailed information for a specific event
 - `add_or_update_event`: Create or update an event (workout, race, note, etc.)
 - `delete_event`: Delete a specific event
-- `delete_events_by_date_range`: Delete events within a date range
+- `delete_events_by_date_range`: Preview the exact event change set by default; deletion requires `confirm=true` and matching `expected_event_ids` from that fresh preview.
 - `get_custom_items`: Get custom items (charts, custom fields, zones, etc.) for an athlete
 - `get_custom_item_by_id`: Get detailed information for a specific custom item
 - `create_custom_item`: Create a new custom item for an athlete

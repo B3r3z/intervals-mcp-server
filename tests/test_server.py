@@ -20,6 +20,7 @@ import asyncio
 import os
 import pathlib
 import sys
+import json
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 os.environ.setdefault("API_KEY", "test")
@@ -35,6 +36,7 @@ from intervals_mcp_server.server import (  # pylint: disable=wrong-import-positi
     add_or_update_event,
     get_athlete_power_curves,
     get_event_by_id,
+    delete_events_by_date_range,
     get_events,
     get_gear_list,
     get_wellness_data,
@@ -45,6 +47,8 @@ from intervals_mcp_server.server import (  # pylint: disable=wrong-import-positi
     delete_custom_item,
 )
 from intervals_mcp_server.tools import gear as gear_module  # pylint: disable=wrong-import-position
+from intervals_mcp_server.utils.types import Step, WorkoutDoc  # pylint: disable=wrong-import-position
+from intervals_mcp_server.tools.events import add_or_update_note  # pylint: disable=wrong-import-position
 from tests.sample_data import INTERVALS_DATA, POWER_CURVES_DATA  # pylint: disable=wrong-import-position
 
 
@@ -139,7 +143,9 @@ def test_get_event_by_id(monkeypatch):
         "race": True,
     }
 
+    seen = []
     async def fake_request(*_args, **_kwargs):
+        seen.append(_args[0] if _args else _kwargs.get("url"))
         return event
 
     # Patch in both api.client and tools modules to ensure it works
@@ -148,6 +154,78 @@ def test_get_event_by_id(monkeypatch):
     result = asyncio.run(get_event_by_id("e1", athlete_id="1"))
     assert "Event Details:" in result
     assert "Test Event" in result
+    assert seen == ["/athlete/1/events/e1"]
+
+
+def test_delete_events_preview_and_exact_confirmation(monkeypatch):
+    calls = []
+    events = [{"id": "a", "start_date_local": "2024-01-01T00:00:00", "category": "NOTE", "name": "A"},
+              {"id": "b", "date": "2024-01-02", "category": "WORKOUT", "name": "B"}]
+    async def fake(*args, **kwargs):
+        calls.append((kwargs.get("method", "GET"), kwargs.get("url", args[0] if args else "")))
+        return events if kwargs.get("method", "GET") != "DELETE" else {}
+    monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", fake)
+    preview = json.loads(asyncio.run(delete_events_by_date_range("2024-01-01", "2024-01-02", athlete_id="1")))
+    assert preview["events"][0]["id"] == "a" and len(calls) == 1
+    calls.clear()
+    stale = asyncio.run(delete_events_by_date_range("2024-01-01", "2024-01-02", athlete_id="1", confirm=True, expected_event_ids=["a", "a"]))
+    assert "No events deleted" in stale and all(method != "DELETE" for method, _ in calls)
+    calls.clear()
+    ok = asyncio.run(delete_events_by_date_range("2024-01-01", "2024-01-02", athlete_id="1", confirm=True, expected_event_ids=["b", "a"]))
+    assert "Deleted 2" in ok and [url for method, url in calls if method == "DELETE"] == ["/athlete/1/events/a", "/athlete/1/events/b"]
+
+
+def test_delete_preview_requires_confirmation_ids_and_rejects_missing_id(monkeypatch):
+    calls = []
+    async def fake(*args, **kwargs):
+        calls.append(kwargs.get("method", "GET"))
+        return [{"id": None, "name": "bad"}]
+    monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", fake)
+    missing = asyncio.run(delete_events_by_date_range("2024-01-01", "2024-01-01", athlete_id="1"))
+    assert "without an ID" in missing and calls == ["GET"]
+    calls.clear()
+    none_ids = asyncio.run(delete_events_by_date_range("2024-01-01", "2024-01-01", athlete_id="1", confirm=True))
+    assert "expected_event_ids" in none_ids and calls == []
+
+
+def test_structured_workout_payload_and_postconditions(monkeypatch):
+    captured = []
+    async def fake(*args, **kwargs):
+        captured.append(kwargs)
+        return {"id": "w1", "category": "WORKOUT", "name": "Timed", "start_date_local": "2024-01-01T00:00:00",
+                "type": "Ride", "workout_doc": {"duration": 120}}
+    monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", fake)
+    doc = WorkoutDoc(steps=[Step(duration=60), Step(steps=[Step(duration=30)], reps=2)])
+    result = asyncio.run(add_or_update_event("Ride", "Timed", athlete_id="1", start_date="2024-01-01", workout_doc=doc))
+    assert "Successfully created" in result
+    payload = captured[0]["data"]
+    assert "moving_time" not in payload and "distance" not in payload
+    captured.clear()
+    rejected = asyncio.run(add_or_update_event("Ride", "Timed", athlete_id="1", workout_doc=doc, moving_time=1))
+    assert "cannot be combined" in rejected and not captured
+    captured.clear()
+    rejected_distance = asyncio.run(add_or_update_event("Ride", "Timed", athlete_id="1", workout_doc=doc, distance=1))
+    assert "cannot be combined" in rejected_distance and not captured
+
+
+def test_event_write_postconditions_and_note(monkeypatch):
+    doc = WorkoutDoc(steps=[Step(duration=120)])
+    responses = [
+        {"category": "WORKOUT", "name": "Timed", "start_date_local": "2024-01-01T00:00:00", "type": "Ride", "workout_doc": {"duration": 120}},
+        {"id": "w", "category": "WORKOUT", "name": "Wrong", "start_date_local": "2024-01-01T00:00:00", "type": "Ride", "workout_doc": {"duration": 120}},
+        {"id": "w", "category": "WORKOUT", "name": "Timed", "start_date_local": "2024-01-01T00:00:00", "type": "Ride", "workout_doc": {"duration": 60}},
+        {"error": True, "message": "upstream failed"},
+    ]
+    async def fake(*_args, **_kwargs):
+        return responses.pop(0)
+    monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", fake)
+    for expected in ("event id", "mismatch", "duration mismatch", "upstream failed"):
+        result = asyncio.run(add_or_update_event("Ride", "Timed", athlete_id="1", start_date="2024-01-01", workout_doc=doc))
+        assert "Error" in result and expected in result
+    async def note(*_args, **_kwargs):
+        return {"id": "n", "category": "NOTE", "name": "Note", "start_date_local": "2024-01-01T00:00:00"}
+    monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", note)
+    assert "Successfully created event id: n" in asyncio.run(add_or_update_note("Note", "Text", start_date="2024-01-01", athlete_id="1"))
 
 
 def test_get_wellness_data(monkeypatch):
@@ -297,6 +375,39 @@ def test_get_activity_streams(monkeypatch):
     assert "watts" in result
     assert "heartrate" in result
     assert "Data Points: 11" in result
+    assert "First 5 values: [0, 1, 2, 3, 4]" in result
+    assert "Last 5 values: [6, 7, 8, 9, 10]" in result
+
+
+def test_get_activity_streams_range_and_invalid_range(monkeypatch):
+    calls = []
+    streams = [{"type": "watts", "name": "watts", "valueType": "power_units",
+                "data": [0, 1, None, 3, 4, 5, 6, 7]}]
+    async def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return streams
+    monkeypatch.setattr("intervals_mcp_server.tools.activities.make_intervals_request", fake)
+    result = json.loads(asyncio.run(get_activity_streams("a", start_index=2, end_index=6)))
+    assert result["streams"][0]["data"] == [None, 3, 4, 5]
+    assert result["streams"][0]["total_points"] == 8
+    calls.clear()
+    bad = asyncio.run(get_activity_streams("a", start_index=2))
+    assert "Error" in bad and not calls
+    calls.clear()
+    assert "Error" in asyncio.run(get_activity_streams("a", start_index=-1, end_index=2)) and not calls
+    assert "Error" in asyncio.run(get_activity_streams("a", start_index=2, end_index=2)) and not calls
+    assert "Error" in asyncio.run(get_activity_streams("a", start_index=0, end_index=99)) and len(calls) == 1
+
+
+def test_get_activity_streams_latlng_slices_data2(monkeypatch):
+    async def fake(*_args, **_kwargs):
+        return [{"type": "latlng", "name": "latlng", "valueType": "latlng", "data": [1, None, 0, 4],
+                 "data2": [5, 6, None, 0], "valueTypeIsArray": True, "custom": False}]
+    monkeypatch.setattr("intervals_mcp_server.tools.activities.make_intervals_request", fake)
+    result = json.loads(asyncio.run(get_activity_streams("a", start_index=1, end_index=4)))
+    stream = result["streams"][0]
+    assert stream["data"] == [None, 0, 4] and stream["data2"] == [6, None, 0]
+    assert stream["valueTypeIsArray"] is True
 
 
 def test_add_or_update_event(monkeypatch):

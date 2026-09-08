@@ -140,12 +140,12 @@ def _parse_response(
     Returns:
         Parsed JSON response or error dict.
     """
+    response.raise_for_status()
     try:
         response_data = response.json() if response.content else {}
     except JSONDecodeError:
         logger.error("Invalid JSON in response from: %s", full_url)
         return {"error": True, "message": "Invalid JSON in response"}
-    response.raise_for_status()
     return response_data
 
 

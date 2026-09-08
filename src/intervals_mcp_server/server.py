@@ -111,6 +111,7 @@ __all__ = [
     "get_event_by_id",
     "delete_event",
     "delete_events_by_date_range",
+    "get_gear_list",
     "add_or_update_event",
     "get_wellness_data",
     "get_athlete_power_curves",

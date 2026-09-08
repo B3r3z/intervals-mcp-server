@@ -10,6 +10,7 @@ import logging
 import os
 import pathlib
 import sys
+import httpx
 from json import JSONDecodeError
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -99,3 +100,17 @@ def test_make_intervals_request_bad_json(monkeypatch, caplog):
 
     assert result["error"] is True
     assert "Invalid JSON in response" in result["message"]
+
+
+def test_make_request_http_error_preserves_status(monkeypatch):
+    response = httpx.Response(502, content=b"<html>bad gateway</html>", request=httpx.Request("GET", "https://example.test"))
+    class FakeClient:
+        async def request(self, **_kwargs):
+            return response
+    async def fake_client():
+        return FakeClient()
+    monkeypatch.setattr(api_client, "_get_httpx_client", fake_client)
+    monkeypatch.setattr(api_client, "get_config", lambda: Config(api_key="test", athlete_id="i1", intervals_api_base_url="https://example.test", user_agent="test"))
+    result = asyncio.run(api_client.make_intervals_request("/bad"))
+    assert result["error"] is True and result["status_code"] == 502
+    assert "Invalid JSON" not in result["message"]

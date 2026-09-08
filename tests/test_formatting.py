@@ -15,6 +15,7 @@ from intervals_mcp_server.utils.formatting import (
     format_power_curves,
 )
 from tests.sample_data import INTERVALS_DATA
+from intervals_mcp_server.utils.types import Value, ValueUnits
 
 
 def test_format_activity_summary():
@@ -32,6 +33,23 @@ def test_format_activity_summary():
     result = format_activity_summary(data)
     assert "Activity: Morning Ride" in result
     assert "ID: 1" in result
+
+
+def test_pace_units_round_trip_and_ranges():
+    expected = {
+        ValueUnits.MINS_KM: "5:00/km Pace",
+        ValueUnits.MINS_MILE: "5:00/mi Pace",
+        ValueUnits.SECS_100M: "1:40/100m Pace",
+        ValueUnits.SECS_100Y: "1:40/100y Pace",
+        ValueUnits.SECS_500M: "1:40/500m Pace",
+    }
+    for unit, text in expected.items():
+        value = 5 if unit in (ValueUnits.MINS_KM, ValueUnits.MINS_MILE) else 100
+        assert str(Value(value=value, units=unit)) == text
+    assert Value.from_dict({"value": 100, "units": "SECS_100Y"}).to_dict() == {
+        "value": 100, "units": "SECS_100Y"
+    }
+    assert str(Value(start=5, end=5.5, units=ValueUnits.MINS_KM)) == "5:00/km-5:30/km Pace"
 
 
 def test_format_workout():
@@ -188,6 +206,29 @@ def test_format_intervals():
     result = format_intervals(INTERVALS_DATA)
     assert "Intervals Analysis:" in result
     assert "Rep 1" in result
+
+
+def test_format_intervals_preserves_missing_and_zero():
+    result = format_intervals({"icu_intervals": [{"average_watts": None, "max_watts": 0}],
+                               "icu_groups": [{"average_watts": None, "max_watts": 0}]})
+    individual, groups = result.split("Interval Groups:")
+    assert "Average Power: N/A watts" in individual and "Max Power: 0 watts" in individual
+    assert "Power: Avg N/A watts" in groups and "Max 0 watts" in groups
+
+
+def test_current_api_activity_and_event_shape():
+    assert "2026-01-02" in format_activity_summary({"name": "Ride", "start_date_local": "2026-01-02T08:00:00"})
+    summary = format_event_summary({"id": "e", "category": "WORKOUT", "start_date_local": "2026-01-02T00:00:00", "name": "Ride"})
+    assert "Type: Workout" in summary and "2026-01-02" in summary
+    details = format_event_details({"id": "e", "category": "WORKOUT", "start_date_local": "2026-01-02T00:00:00",
+                                    "name": "Ride", "type": "Ride", "workout_doc": {"duration": 120, "steps": [{}, {}]},
+                                    "icu_training_load": 55})
+    assert "2026-01-02" in details and "Sport: Ride" in details and "Duration: 120 seconds" in details
+    assert "Intervals: 2" in details and "Training Load: 55" in details
+    zero_duration = format_event_details({"category": "WORKOUT", "type": "Ride", "workout_doc": {"duration": 0}, "moving_time": 99})
+    assert "Duration: 0 seconds" in zero_duration
+    race = format_event_details({"category": "RACE_A", "start_date_local": "2026-01-02T00:00:00"})
+    assert "Race Information:" in race
 
 
 def test_format_power_curves():
