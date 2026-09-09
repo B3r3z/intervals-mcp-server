@@ -10,10 +10,6 @@ from typing import Any
 
 from intervals_mcp_server.api.client import make_intervals_request
 from intervals_mcp_server.config import get_config
-from intervals_mcp_server.tools.gear import (
-    resolve_gear_for_activity,
-    resolve_gear_for_activities,
-)
 from intervals_mcp_server.utils.validation import resolve_athlete_id
 from intervals_mcp_server.contracts import ReadResponse, success, failure
 from intervals_mcp_server.artifacts import write_activity_artifact
@@ -93,10 +89,54 @@ def _parse_activities_from_result(result: Any) -> list[dict[str, Any]]:
                 activities = [item for item in value if isinstance(item, dict)]
                 break
         # If no list was found but the dict has typical activity fields, treat it as a single activity
-        if not activities and any(key in result for key in ["name", "startTime", "distance"]):
+        if not activities and any(
+            key in result for key in ["name", "startTime", "start_date_local", "start_date", "distance"]
+        ):
             activities = [result]
 
     return activities
+
+
+def _activity_date_key(activity: dict[str, Any]) -> str:
+    """Return the canonical start marker for an activity.
+
+    Intervals payloads use ``start_date_local`` today, while older payloads
+    may expose ``startTime`` or ``start_date``.  Keeping the fallback order in
+    one place ensures that date filtering and ordering make the same choice.
+    Blank values are ignored and an activity without a usable date gets an
+    empty key so it sorts after dated activities.  Consumers that need a
+    calendar date (rather than the full timestamp) take the first ten
+    characters from this same value.
+    """
+    for field in ("start_date_local", "startTime", "start_date"):
+        value = activity.get(field)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _deduplicate_activities(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one row per activity ID while preserving rows without an ID."""
+    unique: dict[str, dict[str, Any]] = {}
+    for index, activity in enumerate(activities):
+        raw_id = activity.get("id")
+        id_key = str(raw_id).strip() if raw_id is not None and str(raw_id).strip() else f"__missing_{index}"
+        unique[id_key] = activity
+    return list(unique.values())
+
+
+def _sort_activities(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort newest dates first, then deterministically by string activity ID."""
+    # Python's sort is stable: sorting IDs first makes them the tie-breaker
+    # when the second pass groups rows by their canonical date.
+    by_id = sorted(
+        activities,
+        key=lambda activity: str(activity.get("id", "")).strip(),
+    )
+    return sorted(by_id, key=_activity_date_key, reverse=True)
 
 
 @mcp.tool()
@@ -201,6 +241,7 @@ async def get_activities(
         rows = cached[2]
         source_complete = cached[3]
         offset = int(parts[2])
+        snapshot = parts[1]
     else:
         result = await make_intervals_request(
             url=f"/athlete/{aid}/activities",
@@ -211,27 +252,18 @@ async def get_activities(
         if failed:
             return failed
         source_complete = len(result) < 10000 if isinstance(result, list) else None
-        rows = sorted(
-            _parse_activities_from_result(result),
-            key=lambda row: (str(row.get("startTime", "")), str(row.get("id", ""))),
-        )
+        rows = _deduplicate_activities(_parse_activities_from_result(result))
+        if start_date or end_date_exclusive:
+            rows = [
+                row
+                for row in rows
+                if start <= _activity_date_key(row)[:10] < end_exclusive
+            ]
+        if sports:
+            rows = [row for row in rows if row.get("type") in sports or row.get("sport") in sports]
+        rows = _sort_activities(rows)
         offset = 0
-    unique: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        unique[str(row.get("id", f"__missing_{len(unique)}"))] = row
-    rows = list(unique.values())
-    if start_date or end_date_exclusive:
-        rows = [
-            row
-            for row in rows
-            if start
-            <= str(row.get("start_date_local", row.get("startTime", "")))[:10]
-            < end_exclusive
-        ]
-    await resolve_gear_for_activities(rows, athlete_id=aid, api_key=api_key)
-    if sports:
-        rows = [row for row in rows if row.get("type") in sports or row.get("sport") in sports]
-    snapshot = cursor.split(".")[1] if cursor else secrets.token_hex(12)
+        snapshot = secrets.token_hex(12)
     if not cursor:
         _ACTIVITY_SNAPSHOTS[snapshot] = (
             time.monotonic(),
@@ -281,9 +313,11 @@ async def get_activity_details(activity_id: str, api_key: str | None = None) -> 
     if failed:
         return failed
     row = result[0] if isinstance(result, list) and result else result
-    if isinstance(row, dict):
-        await resolve_gear_for_activity(row, api_key=api_key)
-    return success(row, resource="activity", query={"activity_id": activity_id})
+    return success(
+        row,
+        resource="activity",
+        query={"activity_id": activity_id},
+    )
 
 
 @mcp.tool()

@@ -54,6 +54,20 @@ mypy src tests
 uv run --locked pytest
 ```
 
+### Intervals.icu OpenAPI contract
+
+The repository pins a normalized projection of the 18 Intervals.icu REST operations used by
+the MCP tools, rather than a copy of the full OpenAPI document. Check a downloaded upstream
+specification without modifying either file:
+
+```bash
+uv run python scripts/check_openapi_contract.py --spec <path-to-openapi.json>
+```
+
+The checker rejects a changed source hash by default. Use `--allow-new-source-hash` only for an
+explicit semantic comparison; it does not update the pinned provenance. Known OpenAPI generator
+exceptions are narrow, documented entries in the projection fixture.
+
 ## Pull request guidelines
 
 * Use concise commit messages.

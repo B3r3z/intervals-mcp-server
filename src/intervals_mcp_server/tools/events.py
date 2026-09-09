@@ -40,9 +40,10 @@ def _prepare_event_data(  # pylint: disable=too-many-arguments,too-many-position
         "start_date_local": start_date + "T00:00:00",
         "category": "WORKOUT",
         "name": name,
-        "description": str(workout_doc) if workout_doc else None,
         "type": resolved_workout_type,
     }
+    if workout_doc is not None:
+        data["description"] = str(workout_doc)
     if moving_time is not None:
         data["moving_time"] = moving_time
     if distance is not None:
@@ -92,7 +93,7 @@ async def _delete_events_list(
 
 @mcp.tool()
 async def delete_event(
-    event_id: str,
+    event_id: int,
     athlete_id: str | None = None,
     api_key: str | None = None,
 ) -> str:
@@ -105,8 +106,6 @@ async def delete_event(
     athlete_id_to_use, error_msg = resolve_athlete_id(athlete_id, config.athlete_id)
     if error_msg:
         return error_msg
-    if not event_id:
-        return "Error: No event ID provided."
     result = await make_intervals_request(
         url=f"/athlete/{athlete_id_to_use}/events/{event_id}", api_key=api_key, method="DELETE"
     )
@@ -201,7 +200,7 @@ async def add_or_update_event(  # pylint: disable=too-many-arguments,too-many-po
     name: str,
     athlete_id: str | None = None,
     api_key: str | None = None,
-    event_id: str | None = None,
+    event_id: int | None = None,
     start_date: str | None = None,
     workout_doc: WorkoutDoc | None = None,
     moving_time: int | None = None,
@@ -307,7 +306,7 @@ async def add_or_update_note(
     color: str | None = "green",
     athlete_id: str | None = None,
     api_key: str | None = None,
-    event_id: str | None = None,
+    event_id: int | None = None,
 ) -> str:
     """Add or update a plain text note (category NOTE) on the Intervals.icu calendar.
 
@@ -346,7 +345,7 @@ async def _create_or_update_event_request(
     athlete_id: str,
     api_key: str | None,
     event_data: dict[str, Any],
-    event_id: str | None,
+    event_id: int | None,
     expected_duration: int | None = None,
 ) -> str:
     """Create or update an event via API request.
@@ -361,15 +360,18 @@ async def _create_or_update_event_request(
         Formatted response string.
     """
     url = f"/athlete/{athlete_id}/events"
-    if event_id:
+    if event_id is not None:
         url += f"/{event_id}"
-    result = await make_intervals_request(
-        url=url,
-        api_key=api_key,
-        data=event_data,
-        method="PUT" if event_id else "POST",
-    )
-    action = "updated" if event_id else "created"
+    request_kwargs: dict[str, Any] = {
+        "url": url,
+        "api_key": api_key,
+        "data": event_data,
+        "method": "PUT" if event_id is not None else "POST",
+    }
+    if event_id is None:
+        request_kwargs["params"] = {"upsertOnUid": False}
+    result = await make_intervals_request(**request_kwargs)
+    action = "updated" if event_id is not None else "created"
     if isinstance(result, dict) and result.get("error"):
         return f"Error {action} event: {result.get('message', 'Unknown error')}"
     if not isinstance(result, dict) or not result.get("id"):
@@ -425,10 +427,8 @@ async def get_events(athlete_id: str | None = None, api_key: str | None = None,
 
 
 @mcp.tool()
-async def get_event_by_id(event_id: str, athlete_id: str | None = None,
+async def get_event_by_id(event_id: int, athlete_id: str | None = None,
                           api_key: str | None = None) -> ReadResponse[Any]:
-    if not event_id or not event_id.strip():
-        return failure(resource="event", code="INVALID_EVENT_ID", message="event_id is required", phase="validation")
     aid, err = resolve_athlete_id(athlete_id, config.athlete_id)
     if err:
         return failure(resource="event", code="INVALID_ATHLETE", message=err, phase="validation")

@@ -1,0 +1,596 @@
+{
+  "projection_version": 1,
+  "source": {
+    "sha256": "2ADB2740529E1ADD18E790ECA75D17FA9D28D700DC464791DB5BD6767C1C7B50",
+    "openapi": "3.0.1",
+    "title": "Intervals.icu API",
+    "version": "v1.0.0",
+    "servers": [
+      {
+        "url": "https://intervals.icu"
+      }
+    ]
+  },
+  "security": {
+    "root": [
+      {
+        "APIKey": [],
+        "AccessToken": []
+      }
+    ],
+    "schemes": {
+      "APIKey": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "Username is API_KEY, Password is your API key found in /settings"
+      },
+      "AccessToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Use bearer token for an athlete from OAuth flow"
+      }
+    }
+  },
+  "operations": [
+    {
+      "method": "GET",
+      "operationId": "getActivity",
+      "path": "/api/v1/activity/{id}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "getIntervals",
+      "path": "/api/v1/activity/{id}/intervals",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listActivityMessages",
+      "path": "/api/v1/activity/{id}/messages",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "operationId": "sendActivityMessage",
+      "path": "/api/v1/activity/{id}/messages",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "request_schema": "NewActivityMsg"
+    },
+    {
+      "method": "GET",
+      "operationId": "getActivityStreams",
+      "path": "/api/v1/activity/{id}/streams{ext}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "ext",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listActivities",
+      "path": "/api/v1/athlete/{id}/activities",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "oldest",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listEvents",
+      "path": "/api/v1/athlete/{id}/events{format}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "format",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "operationId": "createEvent",
+      "path": "/api/v1/athlete/{id}/events",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "upsertOnUid",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "request_schema": "EventEx"
+    },
+    {
+      "method": "GET",
+      "operationId": "showEvent",
+      "path": "/api/v1/athlete/{id}/events/{eventId}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "eventId",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "PUT",
+      "operationId": "updateEvent",
+      "path": "/api/v1/athlete/{id}/events/{eventId}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "eventId",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "request_schema": "EventEx"
+    },
+    {
+      "method": "DELETE",
+      "operationId": "deleteEvent",
+      "path": "/api/v1/athlete/{id}/events/{eventId}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "eventId",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listWellnessRecords",
+      "path": "/api/v1/athlete/{id}/wellness{ext}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "ext",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listAthletePowerCurves",
+      "path": "/api/v1/athlete/{id}/power-curves{ext}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "ext",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "f1",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "in": "query",
+          "name": "f2",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "in": "query",
+          "name": "f3",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        {
+          "in": "query",
+          "name": "type",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listCustomItems",
+      "path": "/api/v1/athlete/{id}/custom-item",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "POST",
+      "operationId": "createCustomItem",
+      "path": "/api/v1/athlete/{id}/custom-item",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "request_schema": "CustomItem"
+    },
+    {
+      "method": "GET",
+      "operationId": "getCustomItem",
+      "path": "/api/v1/athlete/{id}/custom-item/{itemId}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      ]
+    },
+    {
+      "method": "PUT",
+      "operationId": "updateCustomItem",
+      "path": "/api/v1/athlete/{id}/custom-item/{itemId}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      ],
+      "request_schema": "CustomItem"
+    },
+    {
+      "method": "DELETE",
+      "operationId": "deleteCustomItem",
+      "path": "/api/v1/athlete/{id}/custom-item/{itemId}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "itemId",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      ]
+    }
+  ],
+  "schemas": {
+    "CustomItem": {
+      "allowed_fields": [
+        "athlete_id",
+        "content",
+        "description",
+        "from_athlete",
+        "from_id",
+        "hidden_by_id",
+        "hide_script",
+        "id",
+        "image",
+        "index",
+        "name",
+        "type",
+        "updated",
+        "usage_count",
+        "visibility"
+      ],
+      "required_fields": []
+    },
+    "EventEx": {
+      "allowed_fields": [
+        "athlete_cannot_edit",
+        "athlete_id",
+        "atl_days",
+        "attachments",
+        "calendar_id",
+        "can_train_sports",
+        "carbs_per_hour",
+        "carbs_used",
+        "category",
+        "color",
+        "created_by_id",
+        "ctl_days",
+        "description",
+        "distance",
+        "distance_target",
+        "end_date_local",
+        "entered",
+        "external_id",
+        "file_contents",
+        "file_contents_base64",
+        "filename",
+        "for_week",
+        "hide_from_athlete",
+        "icu_atl",
+        "icu_ctl",
+        "icu_ftp",
+        "icu_intensity",
+        "icu_training_load",
+        "id",
+        "indoor",
+        "joules",
+        "joules_above_ftp",
+        "load_target",
+        "max_training_time",
+        "moving_time",
+        "name",
+        "not_on_fitness_chart",
+        "oauth_client_id",
+        "p_max",
+        "plan_applied",
+        "plan_athlete_id",
+        "plan_folder_id",
+        "plan_workout_id",
+        "push_errors",
+        "shared_event_id",
+        "show_as_note",
+        "show_on_ctl_line",
+        "ss_cp",
+        "ss_p_max",
+        "ss_w_prime",
+        "start_date_local",
+        "strain_score",
+        "structure_read_only",
+        "sub_type",
+        "tags",
+        "target",
+        "time_target",
+        "training_availability",
+        "type",
+        "uid",
+        "updated",
+        "w_prime",
+        "workout",
+        "workout_doc"
+      ],
+      "required_fields": []
+    },
+    "NewActivityMsg": {
+      "allowed_fields": [
+        "content"
+      ],
+      "required_fields": []
+    }
+  },
+  "exceptions": [
+    {
+      "id": "blank-json-suffix",
+      "scope": {
+        "operations": [
+          "GET /api/v1/activity/{id}/streams{ext}",
+          "GET /api/v1/athlete/{id}/events{format}",
+          "GET /api/v1/athlete/{id}/power-curves{ext}",
+          "GET /api/v1/athlete/{id}/wellness{ext}"
+        ],
+        "parameters": [
+          "ext",
+          "format"
+        ]
+      },
+      "rationale": "The server requests JSON by using a blank ext/format suffix; this is also the shape used by reviewed Intervals examples."
+    },
+    {
+      "id": "power-curves-generated-filter-requirements",
+      "scope": {
+        "operations": [
+          "GET /api/v1/athlete/{id}/power-curves{ext}"
+        ],
+        "parameters": [
+          "f1",
+          "f2",
+          "f3"
+        ]
+      },
+      "rationale": "The generated contract marks f1/f2/f3 as required, but the current implementation and reviewed Intervals examples omit them. The required type query parameter is not exempt."
+    },
+    {
+      "id": "root-security-and-vs-api-key",
+      "scope": {
+        "root_security": [
+          {
+            "APIKey": [],
+            "AccessToken": []
+          }
+        ],
+        "selected_server_scheme": "APIKey"
+      },
+      "rationale": "The root OpenAPI security object combines APIKey and AccessToken, while this personal server intentionally authenticates with the documented Basic APIKey scheme."
+    }
+  ]
+}

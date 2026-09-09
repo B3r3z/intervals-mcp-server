@@ -9,6 +9,24 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
+def _schema_types(schema):
+    """Collect JSON Schema types, including optional anyOf/oneOf branches."""
+    if not isinstance(schema, dict):
+        return set()
+    types = set()
+    schema_type = schema.get("type")
+    if isinstance(schema_type, str):
+        types.add(schema_type)
+    elif isinstance(schema_type, list):
+        types.update(item for item in schema_type if isinstance(item, str))
+    for branch_key in ("anyOf", "oneOf", "allOf"):
+        branches = schema.get(branch_key, [])
+        if isinstance(branches, list):
+            for branch in branches:
+                types.update(_schema_types(branch))
+    return types
+
+
 @pytest.mark.asyncio
 async def test_stdio_tools_call_structured_contract():
     errlog = tempfile.TemporaryFile(mode="w+")
@@ -27,6 +45,28 @@ async def test_stdio_tools_call_structured_contract():
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             listed = await session.list_tools()
+            assert "get_gear_list" not in {tool.name for tool in listed.tools}
+            event_tools = {
+                tool.name: tool
+                for tool in listed.tools
+                if tool.name in {
+                    "delete_event",
+                    "add_or_update_event",
+                    "add_or_update_note",
+                    "get_event_by_id",
+                }
+            }
+            assert set(event_tools) == {
+                "delete_event",
+                "add_or_update_event",
+                "add_or_update_note",
+                "get_event_by_id",
+            }
+            for tool in event_tools.values():
+                event_id_schema = tool.inputSchema["properties"]["event_id"]
+                event_id_types = _schema_types(event_id_schema)
+                assert "integer" in event_id_types
+                assert "string" not in event_id_types
             capability = next(tool for tool in listed.tools if tool.name == "get_capabilities")
             assert capability.outputSchema
             result = await session.call_tool("get_capabilities", {})

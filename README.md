@@ -328,6 +328,11 @@ is:
 http://127.0.0.1:8000/mcp
 ```
 
+Normal invocation is idempotent: if the local MCP port is already accepting
+connections, the script exits without rebuilding, restarting, or replacing the
+container. Use `-Rebuild -Recreate` only when an explicit image update is
+needed.
+
 In the `TATRA_V3` project, use a project-local `.codex/config.toml` containing:
 
 ```toml
@@ -342,6 +347,12 @@ single container explicitly:
 ```powershell
 .\scripts\start-mcp.ps1 -Rebuild -Recreate
 ```
+
+Do not put `start-mcp.ps1` in the MCP server's `command` field. That field is for
+a long-lived STDIO server process; this script is a separate HTTP bootstrap and
+intentionally exits after ensuring the container is available. Run it before
+Codex, at Windows logon, or from Docker Desktop startup, while Codex keeps only
+the URL configuration above.
 
 Keep the endpoint local: the current server does not provide separate inbound
 HTTP authentication.

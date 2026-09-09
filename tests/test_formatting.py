@@ -29,10 +29,13 @@ def test_format_activity_summary():
         "startTime": "2024-01-01T08:00:00Z",
         "distance": 1000,
         "duration": 3600,
+        "gear_id": "ignored-bike",
     }
     result = format_activity_summary(data)
     assert "Activity: Morning Ride" in result
     assert "ID: 1" in result
+    assert "Gear:" not in result
+    assert "ignored-bike" not in result
 
 
 def test_pace_units_round_trip_and_ranges():

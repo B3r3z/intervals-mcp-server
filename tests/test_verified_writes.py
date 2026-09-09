@@ -47,7 +47,7 @@ async def test_create_uses_preflight_mutation_and_independent_readback(monkeypat
     }
 
     async def request(url, **kwargs):
-        calls.append((url, kwargs.get("method", "GET")))
+        calls.append({"url": url, **kwargs})
         if kwargs.get("method", "GET") == "POST":
             return {"id": 10}
         if url.endswith("/10"):
@@ -58,7 +58,9 @@ async def test_create_uses_preflight_mutation_and_independent_readback(monkeypat
     event["external_id"] = writes.external_id_for_session("session-1")
     response = await writes.apply_workout_changes("decision", [create_intent()])
     assert response.results[0].outcome == "confirmed"
-    assert [method for _, method in calls] == ["GET", "POST", "GET"]
+    assert [call.get("method", "GET") for call in calls] == ["GET", "POST", "GET"]
+    post_call = next(call for call in calls if call.get("method") == "POST")
+    assert post_call["params"] == {"upsertOnUid": False}
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,25 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $envFile = Join-Path $repoRoot ".env"
 $runtimeDir = Join-Path $repoRoot ".runtime"
 
+function Test-McpPort {
+    param([int]$TargetPort)
+
+    try {
+        return [bool](Test-NetConnection `
+            -ComputerName "127.0.0.1" `
+            -Port $TargetPort `
+            -WarningAction SilentlyContinue `
+            -InformationLevel Quiet)
+    } catch {
+        return $false
+    }
+}
+
+if (-not $Rebuild -and -not $Recreate -and (Test-McpPort -TargetPort $Port)) {
+    Write-Host "MCP jest już dostępny pod http://127.0.0.1:$Port/mcp; nic nie zmieniam."
+    exit 0
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker nie jest dostępny w PATH. Uruchom Docker Desktop i zainstaluj polecenie docker."
 }
@@ -90,18 +109,14 @@ if ($containerExists) {
 }
 
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
-$portReady = $false
+$portReady = Test-McpPort -TargetPort $Port
 while ([DateTime]::UtcNow -lt $deadline) {
     $runningState = (& docker inspect --format "{{.State.Running}}" $ContainerName 2>$null).Trim()
     if ($runningState -ne "true") {
         break
     }
 
-    $portReady = Test-NetConnection `
-        -ComputerName "127.0.0.1" `
-        -Port $Port `
-        -WarningAction SilentlyContinue `
-        -InformationLevel Quiet
+    $portReady = Test-McpPort -TargetPort $Port
     if ($portReady) {
         break
     }

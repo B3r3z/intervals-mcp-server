@@ -172,11 +172,11 @@ async def test_successful_update_has_fresh_preflight_and_readback(monkeypatch, t
         expected_fingerprint=event_fingerprint(current),
         workout=_workout("New"),
     )
-    calls: list[str] = []
+    calls: list[dict[str, object]] = []
 
     async def request(_url, **kwargs):
         method = kwargs.get("method", "GET")
-        calls.append(method)
+        calls.append(dict(kwargs))
         if method == "PUT":
             return {"id": 7}
         return current if len(calls) == 1 else _event(7, "session-update", "New")
@@ -188,7 +188,9 @@ async def test_successful_update_has_fresh_preflight_and_readback(monkeypatch, t
     assert response.results[0].prepared_at
     assert response.results[0].sent_at
     assert response.results[0].completed_at
-    assert calls == ["GET", "PUT", "GET"]
+    assert [call.get("method", "GET") for call in calls] == ["GET", "PUT", "GET"]
+    put_call = next(call for call in calls if call.get("method") == "PUT")
+    assert "params" not in put_call
     record = OperationJournal("athlete", tmp_path).load("op-update")
     assert record is not None
     assert record["result"]["prepared_at"]

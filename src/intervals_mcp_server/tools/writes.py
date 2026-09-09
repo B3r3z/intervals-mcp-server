@@ -522,6 +522,7 @@ async def _apply_workout_change(
                 f"/athlete/{config.athlete_id}/events",
                 api_key=config.api_key,
                 method="POST",
+                params={"upsertOnUid": False},
                 data=serialize_workout_event(intent.workout, ext),
             )
             if _api_error(mutation) and isinstance(mutation, dict):
