@@ -1,16 +1,14 @@
-"""
-Wellness-related MCP tools for Intervals.icu.
+"""Structural wellness read tool."""
 
-This module contains tools for retrieving athlete wellness data.
-"""
+from datetime import date, timedelta
+from typing import Any
 
 from intervals_mcp_server.api.client import make_intervals_request
 from intervals_mcp_server.config import get_config
-from intervals_mcp_server.utils.formatting import format_wellness_entry
-from intervals_mcp_server.utils.validation import resolve_athlete_id, resolve_date_params
-
-# Import mcp instance from shared module for tool registration
-from intervals_mcp_server.mcp_instance import mcp  # noqa: F401
+from intervals_mcp_server.contracts import ReadResponse, failure, success
+from intervals_mcp_server.mcp_instance import mcp
+from intervals_mcp_server.utils.ranges import range_query, validate_range
+from intervals_mcp_server.utils.validation import resolve_athlete_id
 
 config = get_config()
 
@@ -20,52 +18,50 @@ async def get_wellness_data(
     athlete_id: str | None = None,
     api_key: str | None = None,
     start_date: str | None = None,
+    end_date_exclusive: str | None = None,
     end_date: str | None = None,
     include_all_fields: bool = False,
-) -> str:
-    """Get wellness data for an athlete from Intervals.icu.
-
-    By default returns standard wellness fields (training metrics, vitals, sleep,
-    subjective scores, etc.). Set include_all_fields=True to also include any
-    additional or custom fields configured by the user in Intervals.icu.
-
-    Args:
-        athlete_id: The Intervals.icu athlete ID (optional, will use ATHLETE_ID from .env if not provided)
-        api_key: The Intervals.icu API key (optional, will use API_KEY from .env if not provided)
-        start_date: Start date in YYYY-MM-DD format (optional, defaults to 30 days ago)
-        end_date: End date in YYYY-MM-DD format (optional, defaults to today)
-        include_all_fields: If True, include additional and custom fields beyond the standard set (optional, defaults to False)
-    """
-    athlete_id_to_use, error_msg = resolve_athlete_id(athlete_id, config.athlete_id)
-    if error_msg:
-        return error_msg
-
-    start_date, end_date = resolve_date_params(start_date, end_date)
-
-    params = {"oldest": start_date, "newest": end_date}
-
-    result = await make_intervals_request(
-        url=f"/athlete/{athlete_id_to_use}/wellness", api_key=api_key, params=params
-    )
-
-    if isinstance(result, dict) and "error" in result:
-        return f"Error fetching wellness data: {result.get('message')}"
-
-    if not result:
-        return (
-            f"No wellness data found for athlete {athlete_id_to_use} in the specified date range."
+    timezone: str = "Europe/Warsaw",
+) -> ReadResponse[list[dict[str, Any]]]:
+    """Return raw wellness records using a half-open local-date range."""
+    aid, err = resolve_athlete_id(athlete_id, config.athlete_id)
+    if err:
+        return failure(resource="wellness", code="INVALID_ATHLETE", message=err, phase="validation")
+    checked = validate_range(start_date, end_date_exclusive, end_date, timezone)
+    if isinstance(checked, str):
+        return failure(
+            resource="wellness", code="INVALID_RANGE", message=checked, phase="validation"
         )
-
-    wellness_summary = "Wellness Data:\n\n"
-
+    start, exclusive, tz, deprecated = checked
+    newest = (date.fromisoformat(exclusive) - timedelta(days=1)).isoformat()
+    result = await make_intervals_request(
+        url=f"/athlete/{aid}/wellness",
+        api_key=api_key,
+        params={"oldest": start, "newest": newest},
+    )
+    if isinstance(result, dict) and result.get("error"):
+        return failure(
+            resource="wellness",
+            code=str(result.get("code", "UPSTREAM_ERROR")),
+            message=str(result.get("message", "upstream request failed")),
+            phase=str(result.get("phase", "http")),
+            http_status=result.get("http_status") or result.get("status_code"),
+        )
+    rows: list[dict[str, Any]] = []
     if isinstance(result, dict):
-        for date_str, data in result.items():
-            if isinstance(data, dict) and "date" not in data:
-                data["date"] = date_str
-            wellness_summary += format_wellness_entry(data, include_all_fields=include_all_fields) + "\n\n"
+        for key, value in result.items():
+            if isinstance(value, dict):
+                row = dict(value)
+                row.setdefault("date", key)
+                rows.append(row)
     elif isinstance(result, list):
-        for entry in result:
-            if isinstance(entry, dict):
-                wellness_summary += format_wellness_entry(entry, include_all_fields=include_all_fields) + "\n\n"
-
-    return wellness_summary
+        rows = [dict(row) for row in result if isinstance(row, dict)]
+    query: dict[str, Any] = range_query(start, exclusive, tz, timezone)
+    query.update({"upstream_newest": newest, "include_all_fields": include_all_fields})
+    return success(
+        rows,
+        resource="wellness",
+        athlete_id=aid,
+        query=query,
+        warnings=["DEPRECATED_END_DATE"] if deprecated else [],
+    )

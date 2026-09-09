@@ -306,6 +306,46 @@ To start the server manually (useful when developing or testing), run:
 mcp run src/intervals_mcp_server/server.py
 ```
 
+### One shared Streamable HTTP server for TATRA_V3
+
+If multiple Codex agents in the `TATRA_V3` project should use one MCP process,
+run the server once as a Docker container. From the repository root in
+PowerShell:
+
+```powershell
+uv sync --all-extras
+Copy-Item .env.example .env
+# Uzupełnij API_KEY i ATHLETE_ID w .env
+.\scripts\start-mcp.ps1
+```
+
+The script builds the local image when needed, starts the named container, keeps
+the runtime directory persistent, binds only to loopback, and waits until the
+MCP port is accepting connections. It does not print secret values. The endpoint
+is:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+In the `TATRA_V3` project, use a project-local `.codex/config.toml` containing:
+
+```toml
+[mcp_servers.intervals]
+url = "http://127.0.0.1:8000/mcp"
+```
+
+The Codex agents then connect to the already-running server instead of starting
+their own STDIO processes or containers. After changing the image, recreate the
+single container explicitly:
+
+```powershell
+.\scripts\start-mcp.ps1 -Rebuild -Recreate
+```
+
+Keep the endpoint local: the current server does not provide separate inbound
+HTTP authentication.
+
 #### Enabling debug logging
 
 To capture server logs for debugging, wrap the command in a shell and redirect stderr to a file.
@@ -377,3 +417,39 @@ The GNU General Public License v3.0
 <a href="https://glama.ai/mcp/servers/@mvilanova/intervals-mcp-server">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/@mvilanova/intervals-mcp-server/badge" alt="Intervals.icu Server MCP server" />
 </a>
+# M1-M3 data contract
+
+Read tools return the versioned Pydantic `ReadResponse` envelope (`schema_version`
+`1.0`). Its JSON serialization is also the compatibility text representation;
+clients should consume `structuredContent` and must distinguish `null`, missing
+fields, and numeric zero. Date queries use a half-open interval: `start_date`
+is inclusive and `end_date_exclusive` is exclusive, with an explicit timezone.
+
+Large activity data is written only to the configured `INTERVALS_ARTIFACT_DIR`
+(default `.runtime/artifacts`) by `export_activity_data`. Manifests include a
+SHA-256 hash, snapshot, size, range, expiry, and local absolute path, never the
+full samples. Artifacts are temporary and should be re-created after expiry.
+
+`get_capabilities` reports implementation, configuration, and live verification
+separately. No live Intervals account verification is claimed by fixture tests;
+conditional writes, external-id semantics, and settings history remain
+unverified/unavailable until a dedicated integration check.
+
+## M4-M5 writes
+
+`apply_workout_changes` accepts one or more intents and executes them
+sequentially under one account lock. The package is not transactional: execution
+stops at the first non-confirmed result and remaining operations are
+`not_attempted`. Every mutation is journaled as `prepared`, `in_flight`, then a
+final outcome. `get_write_status` is local-only by default; `reconcile=true`
+performs read-only verification and never sends a mutation.
+Workout dates carry an explicit IANA timezone and default to `Europe/Warsaw`.
+
+`INTERVALS_ACCESS_MODE=admin` exposes legacy and safe writes, `coach` exposes
+only the safe write surface, and `readonly` hides mutation tools while retaining
+the read-only `get_write_status`. Live account verification is not implied by
+these capabilities; uncertain writes remain explicitly subject to
+reconciliation.
+
+The scenario-by-scenario fixture and live-verification status is recorded in
+[`TATRA_V3_ACCEPTANCE.md`](TATRA_V3_ACCEPTANCE.md).

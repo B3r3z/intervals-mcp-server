@@ -11,15 +11,16 @@ from typing import Any
 
 from intervals_mcp_server.api.client import make_intervals_request
 from intervals_mcp_server.config import get_config
-from intervals_mcp_server.utils.dates import get_default_end_date, get_default_future_end_date
-from intervals_mcp_server.utils.formatting import format_event_details, format_event_summary
 from intervals_mcp_server.utils.types import WorkoutDoc
 from intervals_mcp_server.utils.validation import resolve_activity_type, resolve_athlete_id, validate_date
 
 # Import mcp instance from shared module for tool registration
 from intervals_mcp_server.mcp_instance import mcp  # noqa: F401
+from intervals_mcp_server.contracts import ReadResponse, success, failure
+from intervals_mcp_server.utils.ranges import range_query, validate_range
 
 config = get_config()
+
 
 
 def _prepare_event_data(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -87,100 +88,6 @@ async def _delete_events_list(
         if isinstance(result, dict) and "error" in result:
             failed_events.append(event.get("id"))
     return failed_events
-
-
-@mcp.tool()
-async def get_events(
-    athlete_id: str | None = None,
-    api_key: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> str:
-    """Get events for an athlete from Intervals.icu
-
-    Args:
-        athlete_id: The Intervals.icu athlete ID (optional, will use ATHLETE_ID from .env if not provided)
-        api_key: The Intervals.icu API key (optional, will use API_KEY from .env if not provided)
-        start_date: Start date in YYYY-MM-DD format (optional, defaults to today)
-        end_date: End date in YYYY-MM-DD format (optional, defaults to 30 days from today)
-    """
-    # Resolve athlete ID
-    athlete_id_to_use, error_msg = resolve_athlete_id(athlete_id, config.athlete_id)
-    if error_msg:
-        return error_msg
-
-    # Parse date parameters (events use different defaults)
-    if not start_date:
-        start_date = get_default_end_date()
-    if not end_date:
-        end_date = get_default_future_end_date()
-
-    # Call the Intervals.icu API
-    params = {"oldest": start_date, "newest": end_date}
-
-    result = await make_intervals_request(
-        url=f"/athlete/{athlete_id_to_use}/events", api_key=api_key, params=params
-    )
-
-    if isinstance(result, dict) and "error" in result:
-        error_message = result.get("message", "Unknown error")
-        return f"Error fetching events: {error_message}"
-
-    # Format the response
-    if not result:
-        return f"No events found for athlete {athlete_id_to_use} in the specified date range."
-
-    # Ensure result is a list
-    events = result if isinstance(result, list) else []
-
-    if not events:
-        return f"No events found for athlete {athlete_id_to_use} in the specified date range."
-
-    events_summary = "Events:\n\n"
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-
-        events_summary += format_event_summary(event) + "\n\n"
-
-    return events_summary
-
-
-@mcp.tool()
-async def get_event_by_id(
-    event_id: str,
-    athlete_id: str | None = None,
-    api_key: str | None = None,
-) -> str:
-    """Get detailed information for a specific event from Intervals.icu
-
-    Args:
-        event_id: The Intervals.icu event ID
-        athlete_id: The Intervals.icu athlete ID (optional, will use ATHLETE_ID from .env if not provided)
-        api_key: The Intervals.icu API key (optional, will use API_KEY from .env if not provided)
-    """
-    # Resolve athlete ID
-    athlete_id_to_use, error_msg = resolve_athlete_id(athlete_id, config.athlete_id)
-    if error_msg:
-        return error_msg
-
-    # Call the Intervals.icu API
-    result = await make_intervals_request(
-        url=f"/athlete/{athlete_id_to_use}/events/{event_id}", api_key=api_key
-    )
-
-    if isinstance(result, dict) and "error" in result:
-        error_message = result.get("message", "Unknown error")
-        return f"Error fetching event details: {error_message}"
-
-    # Format the response
-    if not result:
-        return f"No details found for event {event_id}."
-
-    if not isinstance(result, dict):
-        return f"Invalid event format for event {event_id}."
-
-    return format_event_details(result)
 
 
 @mcp.tool()
@@ -484,3 +391,53 @@ async def _create_or_update_event_request(
     if expected_duration is not None and returned_duration != expected_duration:
         return f"Error {action} event: response duration mismatch."
     return f"Successfully {action} event id: {result['id']}"
+
+
+def _event_error(value: Any, resource: str) -> ReadResponse[Any] | None:
+    if isinstance(value, dict) and value.get("error"):
+        return failure(resource=resource, code=str(value.get("code", "UPSTREAM_ERROR")), message=str(value.get("message", "upstream request failed")), phase=str(value.get("phase", "http")), http_status=value.get("http_status") or value.get("status_code"))
+    return None
+
+
+@mcp.tool()
+async def get_events(athlete_id: str | None = None, api_key: str | None = None,
+                     start_date: str | None = None, end_date_exclusive: str | None = None,
+                     timezone: str = "Europe/Warsaw", end_date: str | None = None) -> ReadResponse[list[dict[str, Any]]]:
+    aid, err = resolve_athlete_id(athlete_id, config.athlete_id)
+    if err:
+        return failure(resource="events", code="INVALID_ATHLETE", message=err, phase="validation")
+    checked = validate_range(start_date, end_date_exclusive, end_date, timezone)
+    if isinstance(checked, str):
+        return failure(resource="events", code="INVALID_RANGE", message=checked, phase="validation")
+    start, exclusive, tz, deprecated = checked
+    from datetime import date, timedelta
+    newest = (date.fromisoformat(exclusive) - timedelta(days=1)).isoformat()
+    result = await make_intervals_request(url=f"/athlete/{aid}/events", api_key=api_key, params={"oldest": start, "newest": newest})
+    failed = _event_error(result, "events")
+    if failed:
+        return failed
+    rows = [dict(row) for row in result if isinstance(row, dict)] if isinstance(result, list) else []
+    rows.sort(key=lambda row: (str(row.get("start_date_local", row.get("date", ""))), str(row.get("id", ""))))
+    warnings = ["DEPRECATED_END_DATE"] if deprecated else []
+    query = range_query(start, exclusive, tz, timezone)
+    query["upstream_newest"] = newest
+    return success(rows, resource="events", athlete_id=aid, query=query, warnings=warnings)
+
+
+@mcp.tool()
+async def get_event_by_id(event_id: str, athlete_id: str | None = None,
+                          api_key: str | None = None) -> ReadResponse[Any]:
+    if not event_id or not event_id.strip():
+        return failure(resource="event", code="INVALID_EVENT_ID", message="event_id is required", phase="validation")
+    aid, err = resolve_athlete_id(athlete_id, config.athlete_id)
+    if err:
+        return failure(resource="event", code="INVALID_ATHLETE", message=err, phase="validation")
+    result = await make_intervals_request(url=f"/athlete/{aid}/events/{event_id}", api_key=api_key)
+    failed = _event_error(result, "event")
+    if failed:
+        return failed
+    if result == {}:
+        return failure(resource="event", code="NOT_FOUND", message="event not found", phase="response")
+    if not isinstance(result, dict):
+        return failure(resource="event", code="INVALID_UPSTREAM_RESPONSE", message="event response is not an object", phase="response")
+    return success(result, resource="event", athlete_id=aid, query={"event_id": event_id})

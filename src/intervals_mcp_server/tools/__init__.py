@@ -33,6 +33,7 @@ from intervals_mcp_server.tools.power_curves import (  # noqa: F401
 )
 from intervals_mcp_server.tools.gear import get_gear_list  # noqa: F401
 from intervals_mcp_server.tools.wellness import get_wellness_data  # noqa: F401
+from intervals_mcp_server.tools.writes import apply_workout_changes, get_write_status  # noqa: F401
 
 
 def register_tools(mcp_instance: FastMCP) -> None:
@@ -70,4 +71,6 @@ __all__ = [
     "get_athlete_power_curves",
     "get_gear_list",
     "get_wellness_data",
+    "apply_workout_changes",
+    "get_write_status",
 ]

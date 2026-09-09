@@ -9,6 +9,7 @@ from json import JSONDecodeError
 import json
 import logging
 import sys
+import asyncio
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any
@@ -133,19 +134,22 @@ def _prepare_request_config(
 
 
 def _parse_response(
-    response: httpx.Response, full_url: str
+    response: httpx.Response, full_url: str, method: str = "GET"
 ) -> dict[str, Any] | list[dict[str, Any]]:
     """Parse HTTP response and return JSON data or error dict.
 
     Returns:
         Parsed JSON response or error dict.
     """
+    # Check status before attempting JSON: gateways often return HTML errors.
     response.raise_for_status()
     try:
         response_data = response.json() if response.content else {}
     except JSONDecodeError:
-        logger.error("Invalid JSON in response from: %s", full_url)
-        return {"error": True, "message": "Invalid JSON in response"}
+        logger.error("Invalid JSON in upstream response (status=%s)", response.status_code)
+        return {"error": True, "code": "INVALID_JSON", "message": "Invalid JSON in response", "phase": "parse",
+                "status_code": response.status_code, "http_status": response.status_code,
+                "recommended_action": "retry read" if method in {"GET", "HEAD", "OPTIONS"} else "reconcile write", "write_outcome": "unknown" if method not in {"GET", "HEAD", "OPTIONS"} else None}
     return response_data
 
 
@@ -155,6 +159,7 @@ async def make_intervals_request(
     params: dict[str, Any] | None = None,
     method: str = "GET",
     data: dict[str, Any] | None = None,
+    _retry_count: int = 0,
 ) -> dict[str, Any] | list[dict[str, Any]]:
     """
     Make a request to the Intervals.icu API with proper error handling.
@@ -169,15 +174,18 @@ async def make_intervals_request(
     Returns:
         dict[str, Any] | list[dict[str, Any]]: The parsed JSON response from the API, or an error dict.
     """
+    global httpx_client  # noqa: PLW0603
+    method = method.upper()
     # Prepare request configuration
     full_url, auth, headers, error_msg = _prepare_request_config(url, api_key, method)
     if error_msg:
-        return {"error": True, "message": error_msg}
+        return {"error": True, "code": "CONFIGURATION_ERROR", "message": error_msg,
+                "phase": "prepare", "recommended_action": "configure API_KEY"}
 
     async def _send_request(client: httpx.AsyncClient) -> httpx.Response:
         if method in {"POST", "PUT"} and data is not None:
             body = json.dumps(data)
-            logger.debug("Request %s %s body: %s", method, full_url, body)
+            logger.debug("Request %s %s (JSON body redacted)", method, url)
             return await client.request(
                 method=method,
                 url=full_url,
@@ -198,32 +206,53 @@ async def make_intervals_request(
 
     try:
         client = await _get_httpx_client()
-
-        try:
-            response = await _send_request(client)
-        except RuntimeError as runtime_error:
-            # httpx closes the client when the underlying connection is severed;
-            # recreate the shared client lazily and retry once.
-            if "client has been closed" not in str(runtime_error).lower():
-                raise
-            logger.warning("HTTPX client was closed; creating a new instance for retries.")
-            global httpx_client  # pylint: disable=global-statement  # noqa: PLW0603 - we intentionally manage the shared client here
-            httpx_client = None
-            client = await _get_httpx_client()
-            response = await _send_request(client)
-
-        return _parse_response(response, full_url)
+        attempts = 3 if method.upper() in {"GET", "HEAD", "OPTIONS"} else 1
+        response = None
+        for attempt in range(attempts):
+            try:
+                response = await _send_request(client)
+            except RuntimeError as runtime_error:
+                # A closed client is safe to recreate only for reads. A write
+                # may already have reached the server and is never retried.
+                if "client has been closed" not in str(runtime_error).lower() or method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+                    raise
+                logger.warning("HTTPX client was closed; recreating for read")
+                httpx_client = None
+                client = await _get_httpx_client()
+                response = await _send_request(client)
+            if response.status_code != HTTPStatus.TOO_MANY_REQUESTS and response.status_code < 500:
+                break
+            if attempt + 1 < attempts:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    delay = min(float(retry_after), 5.0) if retry_after else 0.25 * (attempt + 1)
+                except ValueError:
+                    delay = 0.25 * (attempt + 1)
+                await asyncio.sleep(delay)
+        assert response is not None
+        return _parse_response(response, full_url, method)
     except httpx.HTTPStatusError as e:
-        return _handle_http_status_error(e)
-    except httpx.RequestError as e:
-        logger.error("Request error: %s", str(e))
-        return {"error": True, "message": f"Request error: {str(e)}"}
-    except httpx.HTTPError as e:
-        logger.error("HTTP client error: %s", str(e))
-        return {"error": True, "message": f"HTTP client error: {str(e)}"}
+        return _handle_http_status_error(e, method)
+    except httpx.TimeoutException:
+        if method in {"GET", "HEAD", "OPTIONS"} and _retry_count < 2:
+            return await make_intervals_request(url, api_key, params, method, data, _retry_count=_retry_count + 1)
+        logger.error("Request timeout")
+        return {"error": True, "code": "READ_TIMEOUT" if method in {"GET", "HEAD", "OPTIONS"} else "WRITE_TIMEOUT", "message": "upstream request timed out", "phase": "send", "recommended_action": "retry read" if method in {"GET", "HEAD", "OPTIONS"} else "reconcile write", "write_outcome": "unknown" if method not in {"GET", "HEAD", "OPTIONS"} else None}
+    except httpx.RequestError:
+        if method in {"GET", "HEAD", "OPTIONS"} and _retry_count < 2:
+            return await make_intervals_request(url, api_key, params, method, data, _retry_count=_retry_count + 1)
+        logger.error("Request error")
+        return {"error": True, "code": "REQUEST_ERROR" if method in {"GET", "HEAD", "OPTIONS"} else "WRITE_TRANSPORT_ERROR", "message": "upstream request failed", "phase": "send", "recommended_action": "inspect connectivity", "write_outcome": "unknown" if method not in {"GET", "HEAD", "OPTIONS"} else None}
+    except RuntimeError as exc:
+        if method not in {"GET", "HEAD", "OPTIONS"} and "client has been closed" in str(exc).lower():
+            return {"error": True, "code": "WRITE_NOT_SENT", "message": "HTTP client closed before write completed", "phase": "send", "recommended_action": "reconcile write", "write_outcome": "rejected"}
+        return {"error": True, "code": "INTERNAL_CLIENT_ERROR", "message": "internal HTTP client error", "phase": "send", "recommended_action": "inspect client"}
+    except httpx.HTTPError:
+        logger.error("HTTP client error")
+        return {"error": True, "code": "HTTP_CLIENT_ERROR", "message": "HTTP client error", "phase": "transport", "recommended_action": "inspect connectivity"}
 
 
-def _handle_http_status_error(e: httpx.HTTPStatusError) -> dict[str, Any]:
+def _handle_http_status_error(e: httpx.HTTPStatusError, method: str = "GET") -> dict[str, Any]:
     """Handle HTTP status errors and return formatted error dict.
 
     Args:
@@ -233,10 +262,19 @@ def _handle_http_status_error(e: httpx.HTTPStatusError) -> dict[str, Any]:
         Error dictionary with status code and message.
     """
     error_code = e.response.status_code
-    error_text = e.response.text
-    logger.error("HTTP error: %s - %s", error_code, error_text)
+    # Never include response bodies: they may contain account data or secrets.
+    logger.error("HTTP error: %s", error_code)
+    try:
+        error_text = HTTPStatus(error_code).phrase
+    except ValueError:
+        error_text = "Upstream request failed"
     return {
         "error": True,
         "status_code": error_code,
         "message": _get_error_message(error_code, error_text),
+        "code": f"HTTP_{error_code}",
+        "recommended_action": "check credentials" if error_code in (401, 403) else "retry read" if method in {"GET", "HEAD", "OPTIONS"} and error_code in (429, 502) else "reconcile write" if method not in {"GET", "HEAD", "OPTIONS"} else "inspect request",
+        "write_outcome": "unknown" if method not in {"GET", "HEAD", "OPTIONS"} else None,
+        "http_status": error_code,
+        "phase": "http",
     }

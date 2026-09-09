@@ -183,3 +183,6 @@ TODO
 .claude/
 .DS_Store
 CLAUDE.md
+
+# Local Intervals artifacts (athlete data)
+.runtime/

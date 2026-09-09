@@ -45,6 +45,8 @@ Usage:
 
 import logging
 
+from mcp.server.fastmcp.exceptions import ToolError
+
 # Import API client and configuration
 from intervals_mcp_server.api.client import (
     httpx_client,  # Re-export for backward compatibility with tests
@@ -77,6 +79,7 @@ from intervals_mcp_server.tools.activities import (  # pylint: disable=wrong-imp
     get_activity_intervals,
     get_activity_messages,
     get_activity_streams,
+    export_activity_data,
 )
 from intervals_mcp_server.tools.events import (  # pylint: disable=wrong-import-position  # noqa: E402
     add_or_update_event,
@@ -88,6 +91,11 @@ from intervals_mcp_server.tools.events import (  # pylint: disable=wrong-import-
 from intervals_mcp_server.tools.gear import get_gear_list  # pylint: disable=wrong-import-position  # noqa: E402
 from intervals_mcp_server.tools.wellness import get_wellness_data  # pylint: disable=wrong-import-position  # noqa: E402
 from intervals_mcp_server.tools.power_curves import get_athlete_power_curves  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.capabilities import get_capabilities  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.writes import (  # pylint: disable=wrong-import-position  # noqa: E402
+    apply_workout_changes,
+    get_write_status,
+)
 from intervals_mcp_server.tools.custom_items import (  # pylint: disable=wrong-import-position  # noqa: E402
     create_custom_item,
     delete_custom_item,
@@ -95,6 +103,33 @@ from intervals_mcp_server.tools.custom_items import (  # pylint: disable=wrong-i
     get_custom_items,
     update_custom_item,
 )
+
+
+def _configure_write_surface() -> None:
+    """Hide mutation tools according to the process access mode."""
+    import os
+
+    mode = os.getenv("INTERVALS_ACCESS_MODE", "admin").lower()
+    if mode not in {"admin", "coach", "readonly"}:
+        logger.error("Invalid INTERVALS_ACCESS_MODE; falling back to readonly")
+        mode = "readonly"
+    if mode == "admin":
+        return
+    legacy = {
+        "add_activity_message", "add_or_update_event", "add_or_update_note",
+        "delete_event", "delete_events_by_date_range", "create_custom_item",
+        "update_custom_item", "delete_custom_item",
+    }
+    if mode == "readonly":
+        legacy.add("apply_workout_changes")
+    for name in legacy:
+        try:
+            mcp.remove_tool(name)
+        except ToolError:
+            pass
+
+
+_configure_write_surface()
 
 # Re-export make_intervals_request and httpx_client for backward compatibility
 # pylint: disable=duplicate-code  # This __all__ list is intentionally similar to tools/__init__.py
@@ -107,6 +142,7 @@ __all__ = [
     "get_activity_intervals",
     "get_activity_messages",
     "get_activity_streams",
+    "export_activity_data",
     "get_events",
     "get_event_by_id",
     "delete_event",
@@ -115,6 +151,9 @@ __all__ = [
     "add_or_update_event",
     "get_wellness_data",
     "get_athlete_power_curves",
+    "get_capabilities",
+    "apply_workout_changes",
+    "get_write_status",
     "get_custom_items",
     "get_custom_item_by_id",
     "create_custom_item",

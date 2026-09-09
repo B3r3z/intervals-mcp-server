@@ -4,13 +4,13 @@ Power curve MCP tools for Intervals.icu.
 This module contains tools for retrieving athlete power curve data.
 """
 
-import json
 from datetime import datetime
+import json
 from typing import Any
 
 from intervals_mcp_server.api.client import make_intervals_request
 from intervals_mcp_server.config import get_config
-from intervals_mcp_server.utils.formatting import format_power_curves
+from intervals_mcp_server.contracts import ReadResponse, success, failure
 from intervals_mcp_server.utils.validation import resolve_athlete_id
 
 # Import mcp instance from shared module for tool registration
@@ -103,76 +103,42 @@ def _extract_curve_data(
             "activity_id": (
                 activity_ids[idx]
                 if idx < len(activity_ids) and activity_ids[idx] is not None
-                else ""
+                else None
             ),
         }
         if include_normalised and idx < len(watts_per_kg):
-            point["watts_per_kg"] = round(watts_per_kg[idx], 2)
+            point["watts_per_kg"] = watts_per_kg[idx]
             point["wkg_activity_id"] = (
                 wkg_activity_ids[idx]
                 if idx < len(wkg_activity_ids)
                 and wkg_activity_ids[idx] is not None
-                else ""
+                else None
             )
         data_points.append(point)
 
     return {
-        "id": curve.get("id", ""),
-        "label": curve.get("label", curve.get("id", "")),
-        "start": curve.get("start_date_local", ""),
-        "end": curve.get("end_date_local", ""),
+        "id": curve.get("id"),
+        "label": curve.get("label", curve.get("id")),
+        "start": curve.get("start_date_local"),
+        "end": curve.get("end_date_local"),
         "data_points": data_points,
     }
 
 
 @mcp.tool()
-async def get_athlete_power_curves(
-    activity_type: str = "Ride",
-    durations: list[int] | None = None,
-    indoor_outdoor: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    this_season: bool = True,
-    last_season: bool = True,
-    include_normalised: bool = True,
-    athlete_id: str | None = None,
-    api_key: str | None = None,
-) -> str:
-    """Get power curves for an athlete from Intervals.icu.
-
-    Returns best power output for selected durations across specified time periods.
-    Uses FFT power computation. Power values are in watts.
-
-    Args:
-        activity_type: Activity type (e.g. "Ride", "Run", "VirtualRide"). Default is "Ride".
-        durations: Durations in seconds to include. Default is [5, 15, 30, 60, 120, 300, 600, 1200, 3600]
-        indoor_outdoor: Filter by location — "indoor" or "outdoor". Omit for no filtering.
-        start_date: Start date (YYYY-MM-DD) for custom date range curve. Must be used with end_date.
-        end_date: End date (YYYY-MM-DD) for custom date range curve. Must be used with start_date.
-        this_season: Include this season's curve (default True)
-        last_season: Include last season's curve (default True)
-        include_normalised: Include weight-normalised W/kg values (default True)
-        athlete_id: Intervals.icu athlete ID (optional, uses ATHLETE_ID from .env if not provided)
-        api_key: Optional API key override. Uses API_KEY from .env if not provided.
-    """
-    if durations is None:
-        durations = list(DEFAULT_DURATIONS)
-
-    athlete_id_to_use, error_msg = resolve_athlete_id(athlete_id, config.athlete_id)
-    if error_msg:
-        return error_msg
-
-    if indoor_outdoor and indoor_outdoor not in ("indoor", "outdoor"):
-        return "Error: indoor_outdoor must be 'indoor', 'outdoor', or omitted."
-
+async def get_athlete_power_curves(activity_type: str = "Ride", durations: list[int] | None = None, indoor_outdoor: str | None = None, start_date: str | None = None, end_date: str | None = None, this_season: bool = True, last_season: bool = True, include_normalised: bool = True, athlete_id: str | None = None, api_key: str | None = None) -> ReadResponse[Any]:
+    durations = durations or list(DEFAULT_DURATIONS)
+    aid, err = resolve_athlete_id(athlete_id, config.athlete_id)
+    if err:
+        return failure(resource="power_curves", code="INVALID_ATHLETE", message=err, phase="validation")
     date_error = _validate_dates(start_date, end_date)
     if date_error:
-        return date_error
-
+        return failure(resource="power_curves", code="INVALID_DATE", message=date_error, phase="validation")
+    if indoor_outdoor and indoor_outdoor not in ("indoor", "outdoor"):
+        return failure(resource="power_curves", code="INVALID_FILTER", message="invalid indoor_outdoor", phase="validation")
     curves = _build_curves_param(this_season, last_season, start_date, end_date)
     if not curves:
-        return "Error: At least one curve must be selected (this_season, last_season, or a date range)."
-
+        return failure(resource="power_curves", code="INVALID_CURVES", message="at least one curve required", phase="validation")
     params: dict[str, Any] = {
         "curves": curves,
         "type": activity_type,
@@ -182,33 +148,12 @@ async def get_athlete_power_curves(
         params["filters"] = json.dumps(
             [{"field_id": "indoor", "value": indoor_outdoor, "id": 1}]
         )
-
     result = await make_intervals_request(
-        url=f"/athlete/{athlete_id_to_use}/power-curves",
-        params=params,
-        api_key=api_key,
+        url=f"/athlete/{aid}/power-curves", api_key=api_key, params=params
     )
-
-    if isinstance(result, dict) and "error" in result:
-        error_message = result.get("message", "Unknown error")
-        return f"Error fetching power curves: {error_message}"
-
-    # Response has a "list" key containing curve objects
-    curve_list: list[dict[str, Any]] = []
-    if isinstance(result, dict):
-        curve_list = result.get("list", [])
-    elif isinstance(result, list):
-        curve_list = result
-
-    if not curve_list:
-        return f"No power curve data found for athlete {athlete_id_to_use} ({activity_type})."
-
-    extracted: list[dict[str, Any]] = []
-    for curve in curve_list:
-        if isinstance(curve, dict):
-            extracted.append(_extract_curve_data(curve, durations, include_normalised))
-
-    if not extracted:
-        return f"No power curve data found for athlete {athlete_id_to_use} ({activity_type})."
-
-    return format_power_curves(extracted, activity_type, include_normalised)
+    if isinstance(result, dict) and result.get("error"):
+        return failure(resource="power_curves", code=str(result.get("code", "UPSTREAM_ERROR")), message=str(result.get("message")), phase=str(result.get("phase", "http")), http_status=result.get("http_status") or result.get("status_code"))
+    source = result.get("list", []) if isinstance(result, dict) else result if isinstance(result, list) else []
+    data = [_extract_curve_data(curve, durations, include_normalised) for curve in source if isinstance(curve, dict)]
+    missing = [duration for duration in durations if not any(point.get("secs") == duration for curve in data for point in curve["data_points"])]
+    return success({"curves": data, "missing_durations": missing}, resource="power_curves", athlete_id=aid, query={"activity_type": activity_type, "durations": durations, "indoor_outdoor": indoor_outdoor, "include_normalised": include_normalised}, coverage={"source_complete_within_query": None, "reasons": ["missing_durations"] if missing else []}, warnings=["MISSING_DURATION"] if missing else [])
