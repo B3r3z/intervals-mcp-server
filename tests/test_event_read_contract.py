@@ -29,3 +29,36 @@ def test_event_bad_timezone_and_conflicting_dates(monkeypatch):
     monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", fake)
     assert asyncio.run(get_events(athlete_id="a", timezone="No/Such")).status == "error"
     assert asyncio.run(get_events(athlete_id="a", end_date="2026-01-01", end_date_exclusive="2026-01-02")).status == "error"
+
+
+def test_event_list_sends_resolve_only_when_requested(monkeypatch):
+    calls = []
+
+    async def fake(**kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", fake)
+
+    result = asyncio.run(
+        get_events(
+            athlete_id="a",
+            start_date="2026-09-08",
+            end_date_exclusive="2026-09-09",
+            resolve=True,
+        )
+    )
+
+    assert result.status == "ok"
+    assert calls == [
+        {
+            "url": "/athlete/a/events",
+            "api_key": None,
+            "params": {
+                "oldest": "2026-09-08",
+                "newest": "2026-09-08",
+                "resolve": True,
+            },
+        }
+    ]
+    assert result.query.resolve is True

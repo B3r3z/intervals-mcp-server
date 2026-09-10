@@ -1,9 +1,16 @@
 import asyncio
+import pytest
+import hashlib
+import json
 from intervals_mcp_server.contracts import ReadResponse
-from intervals_mcp_server.tools.activities import get_activities, get_activity_messages
+from intervals_mcp_server.tools.activities import (
+    get_activities,
+    get_activity_details,
+    get_activity_messages,
+)
 
 
-def test_empty_period_is_success_with_complete_coverage(monkeypatch):
+def test_empty_period_is_success_with_unknown_source_coverage(monkeypatch):
     async def fake(**_kwargs):
         return []
 
@@ -19,7 +26,9 @@ def test_empty_period_is_success_with_complete_coverage(monkeypatch):
     )
     assert result.status == "ok"
     assert result.data == []
-    assert result.coverage.source_complete_within_query is True
+    # An empty valid response proves the selected result is empty, but the
+    # endpoint does not prove that the source had no additional records.
+    assert result.coverage.source_complete_within_query is None
     assert result.error is None
 
 
@@ -158,6 +167,170 @@ def test_contract_page_validation_and_timezone(monkeypatch):
     assert result.status == "error"
 
 
+def test_cursor_rejects_snapshot_from_a_different_query(monkeypatch):
+    async def fake(**_kwargs):
+        return [
+            {"id": "first", "start_date_local": "2026-09-02"},
+            {"id": "second", "start_date_local": "2026-09-01"},
+        ]
+
+    monkeypatch.setattr(
+        "intervals_mcp_server.tools.activities.make_intervals_request", fake
+    )
+    first = asyncio.run(
+        get_activities(
+            athlete_id="i123",
+            start_date="2026-09-01",
+            end_date_exclusive="2026-09-03",
+            page_size=1,
+        )
+    )
+    assert first.pagination.next_cursor is not None
+    snapshot = first.pagination.next_cursor.split(".")[1]
+    other_query_key = json.dumps(
+        ["i124", "2026-09-01", "2026-09-03", "Europe/Warsaw", None],
+        sort_keys=True,
+    )
+    cursor = (
+        hashlib.sha256(other_query_key.encode()).hexdigest()[:16]
+        + f".{snapshot}.0"
+    )
+
+    result = asyncio.run(
+        get_activities(
+            athlete_id="i124",
+            start_date="2026-09-01",
+            end_date_exclusive="2026-09-03",
+            cursor=cursor,
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error.code == "INVALID_CURSOR"
+    assert result.data == []
+
+
+def test_hidden_activity_is_preserved_with_explicit_source_limitation(monkeypatch):
+    hidden = {
+        "id": "a-hidden",
+        "source": "STRAVA",
+        "start_date_local": "2026-09-08T07:30:00",
+        "_note": "This activity is hidden by the source privacy policy.",
+    }
+
+    async def fake(**_kwargs):
+        return hidden
+
+    monkeypatch.setattr(
+        "intervals_mcp_server.tools.activities.make_intervals_request", fake
+    )
+    result = asyncio.run(get_activity_details("a-hidden"))
+
+    assert result.status == "partial"
+    assert result.data == hidden
+    assert result.coverage.source_complete_within_query is False
+    assert result.coverage.response_complete is True
+    assert result.coverage.reasons == ["source_record_hidden"]
+    assert result.warnings == ["SOURCE_DATA_LIMITED"]
+    assert result.limitations == [
+        {
+            "code": "SOURCE_DATA_LIMITED",
+            "activity_id": "a-hidden",
+            "source": "STRAVA",
+            "message": hidden["_note"],
+        }
+    ]
+
+
+def test_hidden_strava_marker_without_note_is_limited(monkeypatch):
+    hidden = {"id": "a-hidden", "name": "Hidden", "source": "STRAVA"}
+
+    async def fake(**_kwargs):
+        return hidden
+
+    monkeypatch.setattr(
+        "intervals_mcp_server.tools.activities.make_intervals_request", fake
+    )
+    result = asyncio.run(get_activity_details("a-hidden"))
+
+    assert result.status == "partial"
+    assert result.data == hidden
+    assert result.coverage.reasons == ["source_record_hidden"]
+    assert result.limitations[0]["activity_id"] == "a-hidden"
+
+
+def test_generic_activity_note_is_not_treated_as_hidden(monkeypatch):
+    activity = {
+        "id": "a-visible",
+        "name": "Visible ride",
+        "type": "Ride",
+        "source": "UPLOAD",
+        "_note": None,
+    }
+
+    async def fake(**_kwargs):
+        return activity
+
+    monkeypatch.setattr(
+        "intervals_mcp_server.tools.activities.make_intervals_request", fake
+    )
+    result = asyncio.run(get_activity_details("a-visible"))
+
+    assert result.status == "ok"
+    assert result.data == activity
+    assert result.coverage.source_complete_within_query is None
+    assert result.warnings == []
+    assert result.limitations == []
+
+
+def test_activity_list_preserves_hidden_row_and_identifies_its_limitation(monkeypatch):
+    rows = [
+        {
+            "id": "a-visible",
+            "name": "Visible ride",
+            "type": "Ride",
+            "source": "UPLOAD",
+            "start_date_local": "2026-09-02",
+        },
+        {
+            "id": "a-hidden",
+            "name": "Hidden",
+            "source": "STRAVA",
+            "start_date_local": "2026-09-01",
+        },
+    ]
+
+    async def fake(**_kwargs):
+        return rows
+
+    monkeypatch.setattr(
+        "intervals_mcp_server.tools.activities.make_intervals_request", fake
+    )
+    result = asyncio.run(
+        get_activities(
+            athlete_id="i123",
+            start_date="2026-09-01",
+            end_date_exclusive="2026-09-03",
+            page_size=10,
+        )
+    )
+
+    assert result.status == "partial"
+    assert result.data == rows
+    assert result.coverage.source_complete_within_query is False
+    assert result.coverage.response_complete is True
+    assert "source_record_hidden" in result.coverage.reasons
+    assert result.warnings == ["SOURCE_DATA_LIMITED"]
+    assert result.limitations == [
+        {
+            "code": "SOURCE_DATA_LIMITED",
+            "activity_id": "a-hidden",
+            "source": "STRAVA",
+            "message": "The upstream source returned a hidden activity record.",
+        }
+    ]
+
+
 def test_message_fingerprint(monkeypatch):
     async def fake(**kwargs):
         return [{"id": 1, "name": "athlete", "type": "NOTE", "content": "ok", "created": "t"}]
@@ -191,3 +364,21 @@ def test_message_edit_changes_fingerprint_and_preserves_identity_metadata(monkey
     assert before["updated"].endswith("+02:00")
     assert before["author"] == "athlete"
     assert before["content_fingerprint"] != after["content_fingerprint"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("athlete_id", "i123"), ("activity_id", "a"),
+    ("deleted", "2026-09-09T12:00:00Z"), ("deleted_by_id", "i123"),
+])
+def test_message_identity_or_deletion_changes_fingerprint(monkeypatch, field, value):
+    message = {"id": 42, "content": "same analysis"}
+
+    async def fake(**_kwargs):
+        return [message]
+
+    monkeypatch.setattr("intervals_mcp_server.tools.activities.make_intervals_request", fake)
+    before = asyncio.run(get_activity_messages("a")).data[0]
+    message[field] = value
+    after = asyncio.run(get_activity_messages("a")).data[0]
+    assert after[field] == value and after["content"] == before["content"]
+    assert after["content_fingerprint"] != before["content_fingerprint"]

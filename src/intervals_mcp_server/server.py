@@ -20,36 +20,18 @@ Usage:
     To run the server:
         $ python src/intervals_mcp_server/server.py
 
-    MCP tools provided:
-        - get_activities
-        - get_activity_details
-        - get_activity_intervals
-        - get_activity_streams
-        - get_activity_messages
-        - add_activity_message
-        - get_events
-        - get_event_by_id
-        - add_or_update_event
-        - delete_event
-        - delete_events_by_date_range
-        - get_wellness_data
-        - get_athlete_power_curves
-        - get_custom_items
-        - get_custom_item_by_id
-        - create_custom_item
-        - update_custom_item
-        - delete_custom_item
+    The installed tools and their access modes are described by get_capabilities,
+    using the same catalogue that startup registers with FastMCP.
 
     See the README for more details on configuration and usage.
 """
 
 import logging
 
-from mcp.server.fastmcp.exceptions import ToolError
+from intervals_mcp_server.catalogue import register_tools, tool_catalogue
 
 # Import API client and configuration
 from intervals_mcp_server.api.client import (
-    httpx_client,  # Re-export for backward compatibility with tests
     make_intervals_request,
 )
 from intervals_mcp_server.config import get_config
@@ -70,94 +52,59 @@ logger = logging.getLogger("intervals_icu_mcp_server")
 # Get configuration instance
 config = get_config()
 
-# Import tool modules to register them (tools register themselves via @mcp.tool() decorators)
+# Import handlers for compatibility; installation is explicit below.
 # Import tool functions for re-export
 from intervals_mcp_server.tools.activities import (  # pylint: disable=wrong-import-position  # noqa: E402
-    add_activity_message,
-    get_activities,
-    get_activity_details,
-    get_activity_intervals,
-    get_activity_messages,
-    get_activity_streams,
-    export_activity_data,
+    add_activity_message as add_activity_message,
+    get_activities as get_activities,
+    get_activity_details as get_activity_details,
+    get_activity_intervals as get_activity_intervals,
+    get_activity_messages as get_activity_messages,
+    get_activity_streams as get_activity_streams,
+    export_activity_data as export_activity_data,
 )
 from intervals_mcp_server.tools.events import (  # pylint: disable=wrong-import-position  # noqa: E402
-    add_or_update_event,
-    delete_event,
-    delete_events_by_date_range,
-    get_event_by_id,
-    get_events,
+    add_or_update_event as add_or_update_event,
+    add_or_update_note as add_or_update_note,
+    delete_event as delete_event,
+    delete_events_by_date_range as delete_events_by_date_range,
+    get_event_by_id as get_event_by_id,
+    get_events as get_events,
 )
-from intervals_mcp_server.tools.wellness import get_wellness_data  # pylint: disable=wrong-import-position  # noqa: E402
-from intervals_mcp_server.tools.power_curves import get_athlete_power_curves  # pylint: disable=wrong-import-position  # noqa: E402
-from intervals_mcp_server.tools.capabilities import get_capabilities  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.wellness import get_wellness_data as get_wellness_data  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.power_curves import (  # pylint: disable=wrong-import-position  # noqa: E402
+    get_activity_power_curves as get_activity_power_curves,
+    get_athlete_power_curves as get_athlete_power_curves,
+)
+from intervals_mcp_server.tools.settings import get_sport_settings as get_sport_settings  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.metrics import get_metric_definitions as get_metric_definitions  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.analytics import (  # pylint: disable=wrong-import-position  # noqa: E402
+    get_activity_best_efforts as get_activity_best_efforts,
+    get_activity_interval_stats as get_activity_interval_stats,
+)
+from intervals_mcp_server.tools.capabilities import get_capabilities as get_capabilities  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.artifacts import get_artifact_chunk as get_artifact_chunk  # pylint: disable=wrong-import-position  # noqa: E402
+from intervals_mcp_server.tools.session_context import get_session_context as get_session_context  # pylint: disable=wrong-import-position  # noqa: E402
 from intervals_mcp_server.tools.writes import (  # pylint: disable=wrong-import-position  # noqa: E402
-    apply_workout_changes,
-    get_write_status,
+    apply_workout_changes as apply_workout_changes,
+    get_write_status as get_write_status,
+)
+from intervals_mcp_server.tools.analysis_comments import (  # noqa: E402
+    publish_analysis_comment as publish_analysis_comment,
+    get_analysis_comment_status as get_analysis_comment_status,
 )
 from intervals_mcp_server.tools.custom_items import (  # pylint: disable=wrong-import-position  # noqa: E402
-    create_custom_item,
-    delete_custom_item,
-    get_custom_item_by_id,
-    get_custom_items,
-    update_custom_item,
+    create_custom_item as create_custom_item,
+    delete_custom_item as delete_custom_item,
+    get_custom_item_by_id as get_custom_item_by_id,
+    get_custom_items as get_custom_items,
+    update_custom_item as update_custom_item,
 )
 
 
-def _configure_write_surface() -> None:
-    """Hide mutation tools according to the process access mode."""
-    import os
-
-    mode = os.getenv("INTERVALS_ACCESS_MODE", "admin").lower()
-    if mode not in {"admin", "coach", "readonly"}:
-        logger.error("Invalid INTERVALS_ACCESS_MODE; falling back to readonly")
-        mode = "readonly"
-    if mode == "admin":
-        return
-    legacy = {
-        "add_activity_message", "add_or_update_event", "add_or_update_note",
-        "delete_event", "delete_events_by_date_range", "create_custom_item",
-        "update_custom_item", "delete_custom_item",
-    }
-    if mode == "readonly":
-        legacy.add("apply_workout_changes")
-    for name in legacy:
-        try:
-            mcp.remove_tool(name)
-        except ToolError:
-            pass
-
-
-_configure_write_surface()
-
-# Re-export make_intervals_request and httpx_client for backward compatibility
-# pylint: disable=duplicate-code  # This __all__ list is intentionally similar to tools/__init__.py
-__all__ = [
-    "make_intervals_request",
-    "httpx_client",  # Re-exported for test compatibility
-    "add_activity_message",
-    "get_activities",
-    "get_activity_details",
-    "get_activity_intervals",
-    "get_activity_messages",
-    "get_activity_streams",
-    "export_activity_data",
-    "get_events",
-    "get_event_by_id",
-    "delete_event",
-    "delete_events_by_date_range",
-    "add_or_update_event",
-    "get_wellness_data",
-    "get_athlete_power_curves",
-    "get_capabilities",
-    "apply_workout_changes",
-    "get_write_status",
-    "get_custom_items",
-    "get_custom_item_by_id",
-    "create_custom_item",
-    "update_custom_item",
-    "delete_custom_item",
-]
+# One catalogue supplies installation, availability and capabilities.
+catalogue = register_tools(mcp)
+__all__ = ["make_intervals_request", *tool_catalogue("admin").names()]
 
 
 # Run the server

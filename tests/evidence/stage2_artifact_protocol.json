@@ -1,0 +1,76 @@
+{
+  "all_chunk_artifact_hashes_match": true,
+  "all_chunk_hashes_match": true,
+  "artifact_bytes": 505,
+  "artifact_chunks": 2,
+  "artifact_sha256": "3fcfe79b2eec5f989d504cf8e00e250330b3c23de628a9326f9fb86f4584175c",
+  "calls": [
+    {
+      "domain_status": "ok",
+      "mcp_is_error": false,
+      "output_schema_valid": true,
+      "structured_text_agree": true,
+      "tool": "export_activity_data",
+      "utf8_call_tool_result_bytes": 5104,
+      "utf8_json_text_bytes": 2643
+    },
+    {
+      "domain_status": "partial",
+      "mcp_is_error": false,
+      "output_schema_valid": true,
+      "response_complete": true,
+      "source_system": "intervals-mcp-server",
+      "structured_text_agree": true,
+      "tool": "get_artifact_chunk",
+      "utf8_call_tool_result_bytes": 4942,
+      "utf8_json_text_bytes": 2488
+    },
+    {
+      "domain_status": "ok",
+      "mcp_is_error": false,
+      "output_schema_valid": true,
+      "response_complete": true,
+      "source_system": "intervals-mcp-server",
+      "structured_text_agree": true,
+      "tool": "get_artifact_chunk",
+      "utf8_call_tool_result_bytes": 4840,
+      "utf8_json_text_bytes": 2436
+    },
+    {
+      "domain_error_code": "INVALID_ARTIFACT_ID",
+      "domain_status": "error",
+      "mcp_is_error": false,
+      "output_schema_valid": true,
+      "response_complete": false,
+      "source_system": "intervals-mcp-server",
+      "structured_text_agree": true,
+      "tool": "get_artifact_chunk",
+      "utf8_call_tool_result_bytes": 1992,
+      "utf8_json_text_bytes": 967
+    }
+  ],
+  "chunk_metadata_has_path": false,
+  "duplicates_data2_null_zero_and_custom_preserved": true,
+  "export_manifest_hash_matches": true,
+  "invalid_artifact_id_is_domain_error": true,
+  "mcp_calls": 4,
+  "multibyte_json_reconstructed": true,
+  "proof_boundary": "Artifact reconstructed only from MCP base64 chunks; JSON-RPC framing excluded from byte counts.",
+  "protocol": "MCP ClientSession over stdio",
+  "upstream": "httpx.MockTransport synthetic fixtures; all other requests blocked",
+  "upstream_request_log": [
+    {
+      "method": "GET",
+      "path": "/api/v1/activity/a-artifact/streams",
+      "query": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/activity/a-artifact/intervals",
+      "query": []
+    }
+  ],
+  "upstream_requests": 2,
+  "utf8_call_tool_result_bytes": 16878,
+  "utf8_json_text_bytes": 8534
+}

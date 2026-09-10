@@ -1,0 +1,80 @@
+{
+  "protocol": "MCP ClientSession over stdio",
+  "commands": {
+    "current": "uv run python -m tests.protocol_read_harness --baseline-only --output .runtime/v1-baseline-current.json",
+    "stage0": "uv run python -m tests.protocol_read_harness --baseline-only --server-source .runtime/stage0-source/src --output .runtime/v1-baseline-stage0.json"
+  },
+  "frozen_baseline": {
+    "path": "tests/evidence/stage0_read_protocol_baseline.json",
+    "inputs_unchanged": true
+  },
+  "replays": {
+    "stage0_source": {
+      "mcp_tool_calls": 6,
+      "upstream_http_attempts": 6,
+      "utf8_json_text_bytes": 8678,
+      "utf8_call_tool_result_bytes": 16206,
+      "all_output_schemas_valid": true,
+      "all_structured_text_agree": true,
+      "read_correctness_observations": {
+        "absent_default_streams_reported_missing": false,
+        "hidden_source_limitation_reported": false,
+        "per_curve_missing_durations_present": false,
+        "malformed_shape_became_empty_success": true
+      },
+      "preservation_observations": {
+        "data2_preserved": true,
+        "null_and_zero_samples_preserved": true
+      }
+    },
+    "current_checkout": {
+      "mcp_tool_calls": 6,
+      "upstream_http_attempts": 6,
+      "utf8_json_text_bytes": 11203,
+      "utf8_call_tool_result_bytes": 20740,
+      "all_output_schemas_valid": true,
+      "all_structured_text_agree": true,
+      "read_correctness_observations": {
+        "absent_default_streams_reported_missing": true,
+        "hidden_source_limitation_reported": true,
+        "per_curve_missing_durations_present": true,
+        "malformed_shape_became_empty_success": false
+      },
+      "preservation_observations": {
+        "data2_preserved": true,
+        "null_and_zero_samples_preserved": true
+      }
+    }
+  },
+  "read_correctness_comparison": {
+    "absent_default_streams_reported_missing": {
+      "before_stage0": false,
+      "after_current": true
+    },
+    "hidden_source_limitation_reported": {
+      "before_stage0": false,
+      "after_current": true
+    },
+    "per_curve_missing_durations_present": {
+      "before_stage0": false,
+      "after_current": true
+    },
+    "malformed_shape_became_empty_success": {
+      "before_stage0": true,
+      "after_current": false
+    },
+    "data2_preserved": {
+      "before_stage0": true,
+      "after_current": true
+    },
+    "null_and_zero_samples_preserved": {
+      "before_stage0": true,
+      "after_current": true
+    }
+  },
+  "measurement_notes": {
+    "mcp_tool_calls": "Public tools/call messages only; initialize, tools/list, and JSON-RPC framing excluded.",
+    "utf8_json_text_bytes": "The single JSON compatibility text block for each result.",
+    "utf8_call_tool_result_bytes": "Canonical JSON bytes for the complete CallToolResult; JSON-RPC framing excluded."
+  }
+}

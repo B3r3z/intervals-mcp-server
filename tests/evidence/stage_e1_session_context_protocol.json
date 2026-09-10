@@ -1,0 +1,129 @@
+{
+  "all_context_output_schemas_valid": true,
+  "all_context_structured_text_agree": true,
+  "calls": [
+    {
+      "arguments": {
+        "activity_id": "a-context"
+      },
+      "domain_status": "ok",
+      "mcp_is_error": false,
+      "output_schema_valid": true,
+      "structured_text_agree": true,
+      "tool": "get_session_context",
+      "utf8_call_tool_result_bytes": 14585,
+      "utf8_json_text_bytes": 8634
+    },
+    {
+      "arguments": {
+        "activity_id": "a-context",
+        "athlete_id": "i123",
+        "sections": [
+          "plan"
+        ]
+      },
+      "domain_status": "ok",
+      "mcp_is_error": false,
+      "output_schema_valid": true,
+      "structured_text_agree": true,
+      "tool": "get_session_context",
+      "utf8_call_tool_result_bytes": 11201,
+      "utf8_json_text_bytes": 6774
+    },
+    {
+      "arguments": {
+        "activity_id": "a-context",
+        "sections": [
+          "comments"
+        ]
+      },
+      "domain_status": "ok",
+      "mcp_is_error": false,
+      "output_schema_valid": true,
+      "structured_text_agree": true,
+      "tool": "get_session_context",
+      "utf8_call_tool_result_bytes": 4779,
+      "utf8_json_text_bytes": 2642
+    },
+    {
+      "arguments": {
+        "athlete_id": "i123",
+        "event_id": true
+      },
+      "mcp_is_error": true,
+      "structured_content_present": false,
+      "tool": "get_event_by_id",
+      "utf8_call_tool_result_bytes": 384
+    }
+  ],
+  "comments_only_one_messages_read": true,
+  "comments_only_status": "ok",
+  "context_source_is_local_composition": true,
+  "default_embedded_intervals_requested": true,
+  "default_sections_exact": true,
+  "default_two_upstream_reads": true,
+  "mcp_calls": 4,
+  "message_fingerprint_preserved": true,
+  "no_current_settings_request": true,
+  "plan_uses_raw_event_date_then_exact_resolve": true,
+  "proof_boundary": "JSON-RPC framing is excluded from byte counts.",
+  "protocol": "MCP ClientSession over stdio",
+  "python_version": "3.12.13",
+  "strict_bool_event_id_rejected_before_http": true,
+  "upstream": "httpx.MockTransport synthetic fixtures; all other requests blocked",
+  "upstream_request_log": [
+    {
+      "method": "GET",
+      "path": "/api/v1/activity/a-context",
+      "query": [
+        [
+          "intervals",
+          "true"
+        ]
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/activity/a-context/messages",
+      "query": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/activity/a-context",
+      "query": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/athlete/i123/events/42",
+      "query": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/athlete/i123/events",
+      "query": [
+        [
+          "newest",
+          "2026-09-07"
+        ],
+        [
+          "oldest",
+          "2026-09-07"
+        ],
+        [
+          "resolve",
+          "true"
+        ]
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/activity/a-context/messages",
+      "query": []
+    }
+  ],
+  "upstream_requests": 6,
+  "utf8_call_tool_result_bytes": 30949,
+  "utf8_json_text_bytes": 18050,
+  "valid_empty_and_zero_null_preserved": true,
+  "workout_value_objects_preserved": true
+}

@@ -100,6 +100,34 @@ def test_get_activity_details(monkeypatch):
     assert result.status == "ok" and result.data["name"] == "Morning Ride"
 
 
+def test_get_activity_details_requests_embedded_intervals(monkeypatch):
+    calls = []
+
+    async def fake_request(**kwargs):
+        calls.append(kwargs)
+        return {
+            "id": "a1",
+            "name": "Intervals ride",
+            "icu_intervals": [],
+        }
+
+    monkeypatch.setattr(
+        "intervals_mcp_server.tools.activities.make_intervals_request", fake_request
+    )
+
+    result = asyncio.run(get_activity_details("a1", include_intervals=True))
+
+    assert result.status == "ok"
+    assert calls == [
+        {
+            "url": "/activity/a1",
+            "api_key": None,
+            "params": {"intervals": True},
+        }
+    ]
+    assert result.query.include_intervals is True
+
+
 def test_get_events(monkeypatch):
     """
     Test get_events returns a formatted string containing event details when given a sample event.
@@ -665,9 +693,7 @@ def test_get_athlete_power_curves_no_curves_selected(monkeypatch):
 
 
 def test_get_custom_items(monkeypatch):
-    """
-    Test get_custom_items returns a formatted string containing custom item details.
-    """
+    """Test custom-item list reads return structured identity data."""
     custom_items = [
         {"id": 1, "name": "HR Zones", "type": "ZONES", "description": "Heart rate zones"},
         {"id": 2, "name": "Power Chart", "type": "FITNESS_CHART", "description": None},
@@ -682,16 +708,14 @@ def test_get_custom_items(monkeypatch):
         "intervals_mcp_server.tools.custom_items.make_intervals_request", fake_request
     )
     result = asyncio.run(get_custom_items(athlete_id="1"))
-    assert "Custom Items:" in result
-    assert "HR Zones" in result
-    assert "ZONES" in result
-    assert "Power Chart" in result
+    assert result.status == "ok"
+    assert result.data["items"][0]["name"] == "HR Zones"
+    assert result.data["items"][0]["type"] == "ZONES"
+    assert result.data["items"][1]["name"] == "Power Chart"
 
 
 def test_get_custom_item_by_id(monkeypatch):
-    """
-    Test get_custom_item_by_id returns formatted details of a single custom item.
-    """
+    """Test custom-item detail reads return structured identity data."""
     custom_item = {
         "id": 1,
         "name": "HR Zones",
@@ -709,11 +733,11 @@ def test_get_custom_item_by_id(monkeypatch):
         "intervals_mcp_server.tools.custom_items.make_intervals_request", fake_request
     )
     result = asyncio.run(get_custom_item_by_id(item_id=1, athlete_id="1"))
-    assert "Custom Item Details:" in result
-    assert "HR Zones" in result
-    assert "ZONES" in result
-    assert "Heart rate zones" in result
-    assert "PRIVATE" in result
+    assert result.status == "ok"
+    assert result.data["name"] == "HR Zones"
+    assert result.data["type"] == "ZONES"
+    assert result.data["description"] == "Heart rate zones"
+    assert result.data["visibility"] == "PRIVATE"
 
 
 def test_create_custom_item(monkeypatch):

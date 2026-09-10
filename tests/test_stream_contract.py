@@ -24,6 +24,42 @@ def test_range_null_unequal_and_missing(monkeypatch):
     assert "MISSING_STREAM" in result.warnings
 
 
+def test_default_requested_streams_are_used_for_missing_detection(monkeypatch):
+    result = _run(
+        monkeypatch,
+        [
+            {"type": "time", "data": [0, 1]},
+            {"type": "watts", "data": [0, 200]},
+            {"type": "TymeBreathRate", "data": [0, 30]},
+        ],
+    )
+
+    assert result.status == "partial"
+    assert result.query.stream_types == [
+        "time",
+        "watts",
+        "heartrate",
+        "cadence",
+        "altitude",
+        "distance",
+        "velocity_smooth",
+    ]
+    assert result.data["requested"] == result.query.stream_types
+    assert result.data["missing"] == [
+        "heartrate",
+        "cadence",
+        "altitude",
+        "distance",
+        "velocity_smooth",
+    ]
+    assert [row["type"] for row in result.data["streams"]] == [
+        "time",
+        "watts",
+        "TymeBreathRate",
+    ]
+    assert "MISSING_STREAM" in result.warnings
+
+
 def test_invalid_mode_range_and_snapshot(monkeypatch):
     assert _run(monkeypatch, [], mode="bad").status == "error"
     assert _run(monkeypatch, [], mode="range", start_index=0, end_index=0).status == "error"
@@ -124,3 +160,31 @@ def test_stream_units_and_data2_snapshot_change(monkeypatch):
         expected_snapshot_id=first.pagination.snapshot_id,
     )
     assert changed.error.code == "SNAPSHOT_CHANGED"
+
+
+def test_stream_semantics_identify_processed_raw_units_and_alignment_basis(monkeypatch):
+    result = _run(
+        monkeypatch,
+        [
+            {"type": "time", "data": [0, 1.5, 1.5, None]},
+            {"type": "watts", "data": [200, 201, None, 0]},
+            {"type": "raw_watts", "data": [198, 199, None, 0]},
+            {"type": "heartrate", "data": [140, 141, None, 0]},
+            {"type": "raw_heartrate", "data": [139, 140, None, 0]},
+            {"type": "cadence", "data": [80, 81, None, 0]},
+        ],
+        stream_types="time,watts,raw_watts,heartrate,raw_heartrate,cadence",
+    )
+
+    units = {row["type"]: row["unit"] for row in result.data["streams"]}
+    assert units["watts"] == "W"
+    assert units["raw_watts"] == "W"
+    assert units["heartrate"] == "bpm"
+    assert units["raw_heartrate"] == "bpm"
+    assert units["cadence"] == "1/min"
+    assert "lengths only" in result.data["alignment"]["quality_basis"]
+    assert result.data["time_axis"] == [0, 1.5, 1.5, None]
+    assert result.data["snapshot_scope"]["continuation_requires"] == {
+        "activity_id": "a",
+        "stream_types": ["time", "watts", "raw_watts", "heartrate", "raw_heartrate", "cadence"],
+    }

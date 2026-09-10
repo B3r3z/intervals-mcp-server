@@ -8,26 +8,97 @@ from datetime import datetime, timedelta
 import json
 from typing import Any
 
+from pydantic import StrictBool, StrictInt
+
 from intervals_mcp_server.api.client import make_intervals_request
 from intervals_mcp_server.config import get_config
 from intervals_mcp_server.utils.validation import resolve_athlete_id
-from intervals_mcp_server.contracts import ReadResponse, success, failure
-from intervals_mcp_server.artifacts import write_activity_artifact
+from intervals_mcp_server.contracts import (
+    ReadResponse,
+    failure,
+    invalid_upstream_response,
+    success,
+    upstream_failure,
+)
+from intervals_mcp_server.artifacts import ArtifactStoreError, write_activity_artifact
 import secrets
 import time
 from intervals_mcp_server.utils.ranges import range_query, validate_range
 
 # Import mcp instance from shared module for tool registration
-from intervals_mcp_server.mcp_instance import mcp  # noqa: F401
+from intervals_mcp_server.catalogue import coach_tool
 
 config = get_config()
 _ACTIVITY_SNAPSHOTS: dict[str, tuple[float, str, list[dict[str, Any]], bool | None]] = {}
 _SNAPSHOT_TTL = 900.0
+_MAX_STREAM_RANGE_SAMPLES = 10_000
+_DEFAULT_STREAM_TYPES: tuple[str, ...] = (
+    "time",
+    "watts",
+    "heartrate",
+    "cadence",
+    "altitude",
+    "distance",
+    "velocity_smooth",
+)
 
 
-@mcp.tool()
+def _validate_stream_payload(value: Any) -> str | None:
+    """Return a shape error for a stream list, preserving missing/null arrays."""
+    if not isinstance(value, list):
+        return "stream response must be a list of objects"
+    for stream in value:
+        if not isinstance(stream, dict):
+            return "stream list members must be objects"
+        stream_type = stream.get("type")
+        if not isinstance(stream_type, str) or not stream_type.strip():
+            return "each stream must have a non-empty string type"
+        for field in ("data", "data2"):
+            if field in stream and stream[field] is not None and not isinstance(stream[field], list):
+                return f"stream field {field} must be an array or null"
+    return None
+
+
+def _validate_intervals_payload(value: Any) -> str | None:
+    """Validate interval containers, including the live nullable groups variant."""
+    if isinstance(value, list):
+        if any(not isinstance(row, dict) for row in value):
+            return "flat interval list members must be objects"
+        return None
+    if not isinstance(value, dict):
+        return "interval response must be an object or flat list"
+    recognized = {"icu_intervals", "icu_groups"}.intersection(value)
+    if not recognized:
+        return "interval response must contain icu_intervals or icu_groups"
+    for field in ("icu_intervals", "icu_groups"):
+        if field not in recognized:
+            continue
+        rows = value[field]
+        # The live API can return null here even though its OpenAPI schema says
+        # array. Preserve that distinction instead of coercing it to an empty list.
+        if field == "icu_groups" and rows is None:
+            continue
+        if not isinstance(rows, list) or any(
+            not isinstance(row, dict) for row in rows
+        ):
+            return f"interval field {field} must be an array of objects"
+    return None
+
+
+@coach_tool(access="read", upstream="read", local="write")
 async def export_activity_data(activity_id: str, api_key: str | None = None) -> ReadResponse[Any]:
-    """Export complete raw activity streams/intervals to the configured local artifact directory."""
+    """Export complete raw activity data to the configured local artifact.
+
+    Use this after a compact read when the client needs all stream samples and
+    interval records.  The stream arrays retain their upstream index and null
+    values; this read validates their shape before handing them to the local
+    artifact store. No ``types`` filter is sent, so the artifact includes every
+    stream returned by that request. Streams and intervals come from separate
+    HTTP reads: the returned hash verifies the local composite bytes, not an
+    atomic upstream snapshot. Use ``get_artifact_chunk`` with the opaque ID when
+    the MCP client cannot access the server filesystem. Source completeness
+    remains unknown until the upstream data contract says otherwise.
+    """
     if not activity_id.strip():
         return failure(
             resource="activity_export",
@@ -45,23 +116,39 @@ async def export_activity_data(activity_id: str, api_key: str | None = None) -> 
     failed = _read_error(intervals, "activity_export")
     if failed:
         return failed
-    raw_streams = streams if isinstance(streams, list) else []
+    stream_error = _validate_stream_payload(streams)
+    if stream_error:
+        return invalid_upstream_response(
+            resource="activity_export", message=stream_error
+        )
+    interval_error = _validate_intervals_payload(intervals)
+    if interval_error:
+        return invalid_upstream_response(
+            resource="activity_export", message=interval_error
+        )
+    raw_streams = streams
     # Preserve the upstream stream list verbatim, including duplicate types.
     payload = {"activity_id": activity_id, "streams": raw_streams, "intervals": intervals}
-    import hashlib
-
-    snapshot_id = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
     try:
+        import hashlib
+
+        snapshot_id = hashlib.sha256(
+            json.dumps(
+                payload,
+                allow_nan=False,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         manifest = write_activity_artifact(
             payload, snapshot_id=snapshot_id, source=f"activity/{activity_id}"
         )
-    except (OSError, ValueError) as exc:
+    except (ArtifactStoreError, OSError, TypeError, ValueError):
         return failure(
             resource="activity_export",
             code="ARTIFACT_WRITE_FAILED",
-            message=str(exc),
+            message="Activity artifact could not be written.",
             phase="artifact",
             recommended_action="check artifact configuration and retry the read",
         )
@@ -76,25 +163,38 @@ async def export_activity_data(activity_id: str, api_key: str | None = None) -> 
     )
 
 
-def _parse_activities_from_result(result: Any) -> list[dict[str, Any]]:
-    """Extract a list of activity dictionaries from the API result."""
-    activities: list[dict[str, Any]] = []
+def _parse_activities_from_result(
+    result: Any,
+) -> tuple[list[dict[str, Any]], str | None, bool | None]:
+    """Validate an activity-list response without dropping malformed rows.
 
+    The documented endpoint returns a list.  A small compatibility exception
+    accepts an object with an explicit ``activities`` or ``list`` array and a
+    single activity object with a recognizable activity field.  Unknown
+    objects and mixed arrays remain errors.  The optional completeness marker
+    is used only when the upstream explicitly provides a boolean value.
+    """
     if isinstance(result, list):
-        activities = [item for item in result if isinstance(item, dict)]
-    elif isinstance(result, dict):
-        # Result is a single activity or a container
-        for _key, value in result.items():
-            if isinstance(value, list):
-                activities = [item for item in value if isinstance(item, dict)]
-                break
-        # If no list was found but the dict has typical activity fields, treat it as a single activity
-        if not activities and any(
-            key in result for key in ["name", "startTime", "start_date_local", "start_date", "distance"]
-        ):
-            activities = [result]
-
-    return activities
+        if any(not isinstance(item, dict) for item in result):
+            return [], "activity list members must be objects", None
+        return [dict(item) for item in result], None, None
+    if not isinstance(result, dict):
+        return [], "activity response must be a list or recognized object", None
+    for key in ("activities", "list"):
+        if key in result:
+            values = result[key]
+            if not isinstance(values, list) or any(
+                not isinstance(item, dict) for item in values
+            ):
+                return [], f"activity {key} must be an array of objects", None
+            marker = result.get("source_complete_within_query")
+            return [dict(item) for item in values], None, marker if isinstance(marker, bool) else None
+    if any(
+        key in result
+        for key in ("id", "name", "startTime", "start_date_local", "start_date", "distance")
+    ):
+        return [dict(result)], None, None
+    return [], "activity response object has no recognized activity shape", None
 
 
 def _activity_date_key(activity: dict[str, Any]) -> str:
@@ -139,7 +239,73 @@ def _sort_activities(activities: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(by_id, key=_activity_date_key, reverse=True)
 
 
-@mcp.tool()
+def _activity_source_limitation(activity: dict[str, Any]) -> dict[str, Any] | None:
+    """Describe an explicit upstream Hidden record without guessing from sparsity."""
+    source = activity.get("source")
+    name = activity.get("name")
+    note = activity.get("_note")
+    note_text = note.strip() if isinstance(note, str) else ""
+    hidden_name = isinstance(name, str) and name.strip().casefold() == "hidden"
+    hidden_note = bool(note_text) and (
+        source == "STRAVA"
+        or any(
+            marker in note_text.casefold()
+            for marker in ("hidden", "privacy", "private", "restricted", "unavailable")
+        )
+    )
+    if not hidden_name and not hidden_note:
+        return None
+    return {
+        "code": "SOURCE_DATA_LIMITED",
+        "activity_id": activity.get("id"),
+        "source": source,
+        "message": note_text or "The upstream source returned a hidden activity record.",
+    }
+
+
+def _activity_detail_shape_error(value: Any) -> str | None:
+    """Reject non-activity objects while retaining explicit hidden stubs."""
+    if not isinstance(value, dict) or not value:
+        return "activity detail response must be a non-empty object"
+    if _activity_source_limitation(value) is not None:
+        return None
+    if "id" not in value:
+        return "activity detail response must contain an activity id"
+    semantic_fields = {
+        "name",
+        "type",
+        "startTime",
+        "start_date",
+        "start_date_local",
+        "distance",
+        "source",
+        "duration",
+        "moving_time",
+    }
+    if semantic_fields.isdisjoint(value):
+        return "activity detail response has no recognized activity fields"
+    return None
+
+
+def _sport_filter_limitation(
+    activity: dict[str, Any], sports: list[str] | None
+) -> dict[str, Any] | None:
+    """Mark a hidden row whose sport filter cannot be verified from its stub."""
+    if not sports or _activity_source_limitation(activity) is None:
+        return None
+    has_type = isinstance(activity.get("type"), str) and bool(activity["type"].strip())
+    has_sport = isinstance(activity.get("sport"), str) and bool(activity["sport"].strip())
+    if has_type or has_sport:
+        return None
+    return {
+        "code": "SPORT_FILTER_UNVERIFIED",
+        "activity_id": activity.get("id"),
+        "requested_sports": list(sports),
+        "message": "The hidden source record has no sport field; the requested sport filter cannot be verified.",
+    }
+
+
+@coach_tool(access="legacy_write", upstream="write", local="none")
 async def add_activity_message(
     activity_id: str,
     content: str,
@@ -173,18 +339,10 @@ async def add_activity_message(
 
 
 def _read_error(value: Any, resource: str) -> ReadResponse[Any] | None:
-    if isinstance(value, dict) and value.get("error"):
-        return failure(
-            resource=resource,
-            code=str(value.get("code", "UPSTREAM_ERROR")),
-            message=str(value.get("message", "upstream request failed")),
-            phase=str(value.get("phase", "http")),
-            http_status=value.get("http_status") or value.get("status_code"),
-        )
-    return None
+    return upstream_failure(value, resource=resource)
 
 
-@mcp.tool()
+@coach_tool(access="read", upstream="read", local="memory")
 async def get_activities(
     athlete_id: str | None = None,
     api_key: str | None = None,
@@ -196,6 +354,17 @@ async def get_activities(
     sports: list[str] | None = None,
     limit: int | None = None,
 ) -> ReadResponse[list[dict[str, Any]]]:
+    """List activities in a half-open local-date range with bounded paging.
+
+    ``start_date`` is inclusive and ``end_date_exclusive`` is exclusive.  A
+    valid empty list is different from a malformed upstream response.  The
+    first page is snapshotted for cursor continuation, and a cursor is valid
+    only for the same athlete, range, timezone, and sport filter.  The source
+    endpoint does not expose a trustworthy completeness marker, so source
+    completeness stays ``null`` even when the returned list is short.  A
+    Hidden source stub without a sport field is retained for identity, but a
+    requested sport match is reported as unverified.
+    """
     if (limit if limit is not None else page_size) <= 0:
         return failure(
             resource="activities",
@@ -238,6 +407,13 @@ async def get_activities(
                 message="cursor expired",
                 phase="validation",
             )
+        if cached[1] != query_key:
+            return failure(
+                resource="activities",
+                code="INVALID_CURSOR",
+                message="cursor snapshot does not match query",
+                phase="validation",
+            )
         rows = cached[2]
         source_complete = cached[3]
         offset = int(parts[2])
@@ -251,8 +427,11 @@ async def get_activities(
         failed = _read_error(result, "activities")
         if failed:
             return failed
-        source_complete = len(result) < 10000 if isinstance(result, list) else None
-        rows = _deduplicate_activities(_parse_activities_from_result(result))
+        parsed_rows, parse_error, explicit_source_complete = _parse_activities_from_result(result)
+        if parse_error:
+            return invalid_upstream_response(resource="activities", message=parse_error, athlete_id=aid)
+        source_complete = explicit_source_complete
+        rows = _deduplicate_activities(parsed_rows)
         if start_date or end_date_exclusive:
             rows = [
                 row
@@ -260,7 +439,13 @@ async def get_activities(
                 if start <= _activity_date_key(row)[:10] < end_exclusive
             ]
         if sports:
-            rows = [row for row in rows if row.get("type") in sports or row.get("sport") in sports]
+            rows = [
+                row
+                for row in rows
+                if row.get("type") in sports
+                or row.get("sport") in sports
+                or _activity_source_limitation(row) is not None
+            ]
         rows = _sort_activities(rows)
         offset = 0
         snapshot = secrets.token_hex(12)
@@ -272,6 +457,20 @@ async def get_activities(
             source_complete,
         )
     page = rows[offset : offset + size]
+    source_limitations: list[dict[str, Any]] = []
+    for row in rows:
+        limitation = _activity_source_limitation(row)
+        if limitation is not None:
+            source_limitations.append(limitation)
+        sport_limitation = _sport_filter_limitation(row, sports)
+        if sport_limitation is not None:
+            source_limitations.append(sport_limitation)
+    page_ids = {row.get("id") for row in page}
+    page_limitations = [
+        limitation
+        for limitation in source_limitations
+        if limitation["activity_id"] in page_ids
+    ]
     next_cursor = (
         None
         if offset + size >= len(rows)
@@ -283,94 +482,239 @@ async def get_activities(
     )
     query: dict[str, Any] = range_query(start, end_exclusive, tz, timezone)
     query.update({"upstream_newest": end, "sports": sports, "cursor": cursor})
-    return success(
+    reasons: list[str] = []
+    if source_complete is False:
+        reasons.append("upstream_limit_reached")
+    elif source_complete is None:
+        reasons.append("upstream_completeness_unverified")
+    if any(item["code"] == "SOURCE_DATA_LIMITED" for item in source_limitations):
+        reasons.append("source_record_hidden")
+    if any(item["code"] == "SPORT_FILTER_UNVERIFIED" for item in source_limitations):
+        reasons.append("sport_filter_unverified")
+    response = success(
         page,
         resource="activities",
         athlete_id=aid,
         query=query,
         pagination={"snapshot_id": snapshot, "next_cursor": next_cursor},
         coverage={
-            "source_complete_within_query": source_complete,
-            "response_complete": True,
-            "truncated": next_cursor is not None,
-            "reasons": (
-                []
-                if source_complete
-                else [
-                    "upstream_limit_reached"
-                    if source_complete is False
-                    else "upstream_completeness_unverified"
-                ]
+            "source_complete_within_query": (
+                False if source_limitations else source_complete
             ),
+            "response_complete": next_cursor is None,
+            "truncated": next_cursor is not None,
+            "reasons": reasons,
         },
+        warnings=list(dict.fromkeys(item["code"] for item in source_limitations)),
+        limitations=page_limitations,
     )
+    if source_limitations:
+        response.status = "partial"
+    return response
 
 
-@mcp.tool()
-async def get_activity_details(activity_id: str, api_key: str | None = None) -> ReadResponse[Any]:
-    result = await make_intervals_request(url=f"/activity/{activity_id}", api_key=api_key)
+@coach_tool(access="read", upstream="read", local="none")
+async def get_activity_details(
+    activity_id: str,
+    api_key: str | None = None,
+    include_intervals: StrictBool = False,
+) -> ReadResponse[Any]:
+    """Return one activity with upstream fields preserved.
+
+    A source-hidden record is returned as ``partial`` with an explicit
+    limitation.  In that case the row is useful for identity and timing, but
+    it is not evidence that metrics, intervals, or streams are available; use
+    the dedicated interval and stream tools to check those resources. Set
+    ``include_intervals`` to request the upstream embedded interval container;
+    missing embedded intervals still require ``get_activity_intervals``.
+    """
+    if not isinstance(include_intervals, bool):
+        return failure(
+            resource="activity",
+            code="INVALID_INCLUDE_INTERVALS",
+            message="include_intervals must be a boolean",
+            phase="validation",
+            query={"activity_id": activity_id},
+        )
+    request_kwargs: dict[str, Any] = {
+        "url": f"/activity/{activity_id}",
+        "api_key": api_key,
+    }
+    if include_intervals:
+        request_kwargs["params"] = {"intervals": True}
+    result = await make_intervals_request(**request_kwargs)
     failed = _read_error(result, "activity")
     if failed:
         return failed
-    row = result[0] if isinstance(result, list) and result else result
-    return success(
+    shape_error = _activity_detail_shape_error(result)
+    if shape_error:
+        return invalid_upstream_response(
+            resource="activity",
+            message=shape_error,
+            query={
+                "activity_id": activity_id,
+                "include_intervals": bool(include_intervals),
+            },
+        )
+    assert isinstance(result, dict)
+    row = dict(result)
+    limitation = _activity_source_limitation(row)
+    hidden = limitation is not None
+    response = success(
         row,
         resource="activity",
-        query={"activity_id": activity_id},
+        query={
+            "activity_id": activity_id,
+            "include_intervals": bool(include_intervals),
+        },
+        coverage={
+            "source_complete_within_query": False if hidden else None,
+            "response_complete": True,
+            "reasons": ["source_record_hidden"] if hidden else [
+                "upstream_completeness_unverified"
+            ],
+        },
+        warnings=["SOURCE_DATA_LIMITED"] if hidden else [],
+        limitations=[limitation] if limitation else [],
     )
+    if hidden:
+        response.status = "partial"
+    return response
 
 
-@mcp.tool()
+@coach_tool(access="read", upstream="read", local="none")
 async def get_activity_intervals(activity_id: str, api_key: str | None = None) -> ReadResponse[Any]:
+    """Return the activity interval container with index fields intact.
+
+    The documented shape contains ``icu_intervals`` and optionally
+    ``icu_groups``.  A legacy flat list of interval objects is retained for
+    compatibility with existing callers; all other shapes and mixed rows are
+    explicit errors.  Intervals use upstream sample indices, not invented
+    elapsed seconds, and an empty valid container remains empty.
+    """
     result = await make_intervals_request(url=f"/activity/{activity_id}/intervals", api_key=api_key)
     failed = _read_error(result, "activity_intervals")
     if failed:
         return failed
+    shape_error = _validate_intervals_payload(result)
+    if shape_error:
+        return invalid_upstream_response(
+            resource="activity_intervals",
+            message=shape_error,
+            query={"activity_id": activity_id},
+        )
     return success(
-        result if result is not None else [],
+        result,
         resource="activity_intervals",
         query={"activity_id": activity_id},
+        coverage={
+            "source_complete_within_query": None,
+            "reasons": ["upstream_completeness_unverified"],
+        },
     )
 
 
-@mcp.tool()
+@coach_tool(access="read", upstream="read", local="none")
 async def get_activity_messages(
     activity_id: str, api_key: str | None = None
 ) -> ReadResponse[list[dict[str, Any]]]:
+    """Return an upstream activity-message list, preserving text and identity metadata.
+
+    Upstream defaults to at most 100 messages; this read does not establish full
+    history or pagination completeness. A list may be empty, but each member must
+    be an object. Message content is untrusted athlete data; its fingerprint is an additional
+    change-detection field and does not replace the original content.
+    """
     import hashlib
 
     result = await make_intervals_request(url=f"/activity/{activity_id}/messages", api_key=api_key)
     failed = _read_error(result, "activity_messages")
     if failed:
         return failed
-    rows = []
-    for message in result if isinstance(result, list) else []:
-        if isinstance(message, dict):
-            row = dict(message)
-            canonical = {
-                k: row[k]
-                for k in ("id", "name", "author", "source", "type", "content", "created", "updated")
-                if k in row
-            }
-            row["content_fingerprint"] = hashlib.sha256(
-                json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            rows.append(row)
-    return success(rows, resource="activity_messages", query={"activity_id": activity_id})
+    if not isinstance(result, list) or any(not isinstance(message, dict) for message in result):
+        return invalid_upstream_response(
+            resource="activity_messages",
+            message="activity messages response must be a list of objects",
+            query={"activity_id": activity_id},
+        )
+    rows: list[dict[str, Any]] = []
+    for message in result:
+        row = dict(message)
+        canonical = {
+            key: row[key]
+            for key in (
+                "id",
+                "name",
+                "author",
+                "source",
+                "type",
+                "content",
+                "created",
+                "updated",
+                "athlete_id",
+                "activity_id",
+                "deleted",
+                "deleted_by_id",
+            )
+            if key in row
+        }
+        row["content_fingerprint"] = hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        rows.append(row)
+    return success(
+        rows,
+        resource="activity_messages",
+        query={"activity_id": activity_id},
+        coverage={
+            "source_complete_within_query": None,
+            "reasons": ["upstream_completeness_unverified"],
+        },
+    )
 
 
-@mcp.tool()
+@coach_tool(access="read", upstream="read", local="none")
 async def get_activity_streams(
     activity_id: str,
     api_key: str | None = None,
     mode: str = "preview",
-    start_index: int | None = None,
-    end_index: int | None = None,
+    start_index: StrictInt | None = None,
+    end_index: StrictInt | None = None,
     stream_types: str | None = None,
     expected_snapshot_id: str | None = None,
 ) -> ReadResponse[Any]:
+    """Read activity streams by sample index with bounded preview or range.
+
+    ``range`` uses half-open sample indices ``[start_index, end_index)``;
+    those indices are not elapsed seconds and a single range is limited to
+    10,000 samples. Use ``export_activity_data`` plus ``get_artifact_chunk`` for
+    a larger complete transfer. ``preview`` returns all samples
+    for short arrays and only the first and last five samples for longer
+    arrays, reporting truncation only when samples were omitted.  Missing
+    stream types, missing/null primary arrays, unavailable time axes, and
+    unequal lengths are explicit warnings.  Duplicate and custom upstream
+    streams are retained in order, and no primary ``data`` array is invented
+    for a data2-only stream.  Cadence is exposed as ``1/min``; Ride commonly
+    means revolutions per minute, while running conventions depend on the
+    device and upstream field, with no x2 conversion.  ``alignment.quality``
+    describes array-length alignment only; it does not assert monotonic,
+    regular, or non-null time values.  The snapshot hashes the returned
+    payload for this selection, so a continuation must keep the same activity
+    and ``stream_types``.
+    """
     import hashlib
 
+    if any(
+        value is not None
+        and (isinstance(value, bool) or not isinstance(value, int))
+        for value in (start_index, end_index)
+    ):
+        return failure(
+            resource="activity_streams",
+            code="INVALID_RANGE",
+            message="sample indices must be integers",
+            phase="validation",
+        )
     if mode not in {"preview", "range"}:
         return failure(
             resource="activity_streams",
@@ -386,10 +730,8 @@ async def get_activity_streams(
             phase="validation",
         )
     if mode == "range" and (
-        start_index is not None
-        and start_index < 0
-        or end_index is not None
-        and end_index <= (start_index or 0)
+        (start_index is not None and start_index < 0)
+        or (end_index is not None and end_index <= (start_index or 0))
     ):
         return failure(
             resource="activity_streams",
@@ -397,9 +739,35 @@ async def get_activity_streams(
             message="invalid range",
             phase="validation",
         )
-    requested_param = stream_types or (
-        "time,watts,heartrate,cadence,altitude,distance,velocity_smooth"
+    if (
+        mode == "range"
+        and start_index is not None
+        and end_index is not None
+        and end_index - start_index > _MAX_STREAM_RANGE_SAMPLES
+    ):
+        return failure(
+            resource="activity_streams",
+            code="RANGE_TOO_LARGE",
+            message="A stream range may contain at most 10,000 samples.",
+            phase="validation",
+            recommended_action=(
+                "Use export_activity_data, then retrieve the artifact with "
+                "get_artifact_chunk."
+            ),
+        )
+    if stream_types is not None and not isinstance(stream_types, str):
+        return failure(
+            resource="activity_streams",
+            code="INVALID_STREAM_TYPES",
+            message="stream_types must be a comma-separated string",
+            phase="validation",
+        )
+    requested = (
+        [item.strip() for item in stream_types.split(",") if item.strip()]
+        if stream_types is not None
+        else list(_DEFAULT_STREAM_TYPES)
     )
+    requested_param = ",".join(requested)
     result = await make_intervals_request(
         url=f"/activity/{activity_id}/streams",
         api_key=api_key,
@@ -408,7 +776,20 @@ async def get_activity_streams(
     failed = _read_error(result, "activity_streams")
     if failed:
         return failed
-    streams = result if isinstance(result, list) else []
+    shape_error = _validate_stream_payload(result)
+    if shape_error:
+        return invalid_upstream_response(
+            resource="activity_streams",
+            message=shape_error,
+            query={"activity_id": activity_id},
+        )
+    if not isinstance(result, list):
+        return invalid_upstream_response(
+            resource="activity_streams",
+            message="stream response must be a list of objects",
+            query={"activity_id": activity_id},
+        )
+    streams = [dict(stream) for stream in result]
     canonical = json.dumps(
         streams, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode()
@@ -420,27 +801,24 @@ async def get_activity_streams(
             message="stream snapshot changed",
             phase="validation",
         )
-    available = [str(s.get("type")) for s in streams if isinstance(s, dict)]
-    requested = [x for x in (stream_types or ",".join(available)).split(",") if x]
-    missing = [x for x in requested if x not in available]
+    available = [str(stream["type"]) for stream in streams]
+    missing = [item for item in requested if item not in available]
     selected = [
         stream
         for stream in streams
-        if isinstance(stream, dict) and (not stream_types or stream.get("type") in requested)
+        if stream_types is None or stream.get("type") in requested
     ]
     source_lengths_all = [
-        len(stream[array_name])
+        len(stream[field])
         for stream in selected
-        for array_name in ("data", "data2")
-        if isinstance(stream.get(array_name), list)
+        for field in ("data", "data2")
+        if isinstance(stream.get(field), list)
     ]
     time_source = next(
         (
             stream.get("data")
             for stream in streams
-            if isinstance(stream, dict)
-            and stream.get("type") == "time"
-            and isinstance(stream.get("data"), list)
+            if stream.get("type") == "time" and isinstance(stream.get("data"), list)
         ),
         None,
     )
@@ -455,102 +833,120 @@ async def get_activity_streams(
             phase="validation",
         )
 
-    def select_values(values: list[Any]) -> tuple[list[Any], list[dict[str, int]]]:
+    def select_values(
+        values: list[Any],
+    ) -> tuple[list[Any], list[dict[str, int]], bool]:
         if mode == "preview":
             if len(values) <= 10:
-                return list(values), [{"start_index": 0, "end_index": len(values)}]
+                return list(values), [{"start_index": 0, "end_index": len(values)}], False
             return (
                 values[:5] + values[-5:],
                 [
                     {"start_index": 0, "end_index": 5},
                     {"start_index": len(values) - 5, "end_index": len(values)},
                 ],
+                True,
             )
         assert start_index is not None and end_index is not None
         available_end = min(end_index, len(values))
         if start_index >= available_end:
-            return [], []
-        return values[start_index:available_end], [
-            {"start_index": start_index, "end_index": available_end}
-        ]
+            return [], [], False
+        return (
+            values[start_index:available_end],
+            [{"start_index": start_index, "end_index": available_end}],
+            False,
+        )
 
     payload_streams: list[dict[str, Any]] = []
     alignment_lengths: list[dict[str, Any]] = []
     has_missing_indices = False
+    preview_truncated = False
+    missing_primary_data = False
     for stream_index, stream in enumerate(selected):
         row = dict(stream)
-        raw_values = row.get("data")
-        values: list[Any] = raw_values if isinstance(raw_values, list) else []
-        row["data"], data_spans = select_values(values)
-        row["source_count"] = len(values)
-        row["returned_count"] = len(row["data"])
-        row["effective_spans"] = data_spans
-        alignment_lengths.append(
-            {
-                "stream_index": stream_index,
-                "type": stream.get("type"),
-                "array": "data",
-                "count": len(values),
-            }
-        )
-        if mode == "range" and end_index is not None and end_index > len(values):
-            missing_start = max(start_index or 0, len(values))
-            row["missing_indices"] = [{"start_index": missing_start, "end_index": end_index}]
-            has_missing_indices = True
-        if isinstance(stream.get("data2"), list):
-            data2 = stream["data2"]
-            row["data2"], data2_spans = select_values(data2)
-            row["data2_source_count"] = len(data2)
-            row["data2_returned_count"] = len(row["data2"])
-            row["data2_effective_spans"] = data2_spans
+        for field, prefix in (("data", ""), ("data2", "data2_")):
+            state = "missing" if field not in stream else "null" if stream[field] is None else "present"
+            row[f"{prefix}state" if prefix else "data_state"] = state
+            raw_values = stream.get(field)
+            if isinstance(raw_values, list):
+                values, spans, truncated = select_values(raw_values)
+                row[field] = values
+                row[f"{prefix}source_count" if prefix else "source_count"] = len(raw_values)
+                row[f"{prefix}returned_count" if prefix else "returned_count"] = len(values)
+                row[f"{prefix}effective_spans" if prefix else "effective_spans"] = spans
+                preview_truncated = preview_truncated or truncated
+                if mode == "range" and end_index is not None and end_index > len(raw_values):
+                    missing_start = max(start_index or 0, len(raw_values))
+                    row[
+                        "data2_missing_indices" if field == "data2" else "missing_indices"
+                    ] = [{"start_index": missing_start, "end_index": end_index}]
+                    has_missing_indices = True
+            else:
+                row[f"{prefix}source_count" if prefix else "source_count"] = None
+                row[f"{prefix}returned_count" if prefix else "returned_count"] = None
+                row[f"{prefix}effective_spans" if prefix else "effective_spans"] = []
+                if field == "data":
+                    missing_primary_data = True
+                if mode == "range" and end_index is not None and (
+                    field == "data" or field in stream
+                ):
+                    row[
+                        "data2_missing_indices" if field == "data2" else "missing_indices"
+                    ] = [{"start_index": start_index or 0, "end_index": end_index}]
+                    has_missing_indices = True
+            if field == "data2" and field not in stream:
+                continue
             alignment_lengths.append(
                 {
                     "stream_index": stream_index,
                     "type": stream.get("type"),
-                    "array": "data2",
-                    "count": len(data2),
+                    "array": field,
+                    "count": len(raw_values) if isinstance(raw_values, list) else None,
+                    "state": state,
                 }
             )
-            if mode == "range" and end_index is not None and end_index > len(data2):
-                has_missing_indices = True
-                row["data2_missing_indices"] = [
-                    {
-                        "start_index": max(start_index or 0, len(data2)),
-                        "end_index": end_index,
-                    }
-                ]
-        row["unit"] = row.get("unit") or {
-            "time": "s",
-            "watts": "W",
-            "heartrate": "bpm",
-            "cadence": "rpm",
-            "altitude": "m",
-            "distance": "m",
-            "velocity_smooth": "m/s",
-            "temperature": "C",
-            "coreTemperature": "C",
-            "skinTemperature": "C",
-            "joules": "J",
-        }.get(str(row.get("type")))
+        if "unit" not in row:
+            row["unit"] = {
+                "time": "s",
+                "watts": "W",
+                "raw_watts": "W",
+                "heartrate": "bpm",
+                "raw_heartrate": "bpm",
+                "cadence": "1/min",
+                "altitude": "m",
+                "distance": "m",
+                "velocity_smooth": "m/s",
+                "temperature": "C",
+                "coreTemperature": "C",
+                "skinTemperature": "C",
+                "joules": "J",
+            }.get(str(row.get("type")))
         payload_streams.append(row)
 
     time_axis = None
     if isinstance(time_source, list):
-        time_axis, time_spans = select_values(time_source)
+        time_axis, time_spans, time_truncated = select_values(time_source)
+        preview_truncated = preview_truncated or time_truncated
     else:
         time_spans = []
-    unequal = len({item["count"] for item in alignment_lengths}) > 1
+    counts = [item["count"] for item in alignment_lengths if item["count"] is not None]
+    has_missing_arrays = any(item["count"] is None for item in alignment_lengths)
+    unequal = len(set(counts)) > 1
     warnings = (
         (["MISSING_STREAM"] if missing else [])
         + (["UNEQUAL_STREAM_LENGTHS"] if unequal else [])
+        + (["MISSING_PRIMARY_DATA"] if missing_primary_data else [])
         + (["TIME_AXIS_UNAVAILABLE"] if time_source is None else [])
     )
-    reasons = (
-        (["preview"] if mode == "preview" else [])
-        + (["UNEQUAL_STREAM_LENGTHS"] if unequal else [])
-        + (["MISSING_SAMPLE_INDICES"] if has_missing_indices else [])
-        + (["TIME_AXIS_UNAVAILABLE"] if time_source is None else [])
-    )
+    reasons = ["upstream_completeness_unverified"]
+    if preview_truncated:
+        reasons.append("preview")
+    if unequal or has_missing_arrays:
+        reasons.append("UNEQUAL_STREAM_LENGTHS")
+    if has_missing_indices:
+        reasons.append("MISSING_SAMPLE_INDICES")
+    if time_source is None:
+        reasons.append("TIME_AXIS_UNAVAILABLE")
     response = success(
         {
             "activity_id": activity_id,
@@ -564,8 +960,25 @@ async def get_activity_streams(
             "time_axis_effective_spans": time_spans,
             "alignment": {
                 "source_lengths": alignment_lengths,
-                "equal_source_lengths": not unequal,
-                "quality": "unequal_lengths" if unequal else "aligned",
+                "equal_source_lengths": not unequal and not has_missing_arrays,
+                "quality_basis": (
+                    "array lengths only; does not assert monotonic, regular, or non-null time values"
+                ),
+                "quality": (
+                    "missing_arrays"
+                    if has_missing_arrays
+                    else "unequal_lengths"
+                    if unequal
+                    else "aligned"
+                ),
+            },
+            "snapshot_scope": {
+                "basis": "sha256 of the returned stream payload for the requested selection",
+                "continuation_requires": {
+                    "activity_id": activity_id,
+                    "stream_types": requested,
+                },
+                "same_selection_only": True,
             },
         },
         resource="activity_streams",
@@ -579,12 +992,26 @@ async def get_activity_streams(
         pagination={"snapshot_id": snapshot},
         coverage={
             "source_complete_within_query": None,
-            "response_complete": mode == "range" and not has_missing_indices,
-            "truncated": mode == "preview" or has_missing_indices,
+            "response_complete": not (
+                preview_truncated
+                or has_missing_indices
+                or missing
+                or unequal
+                or has_missing_arrays
+                or time_source is None
+            ),
+            "truncated": preview_truncated or has_missing_indices,
             "reasons": reasons,
         },
         warnings=warnings,
     )
-    if mode == "preview" or has_missing_indices or missing:
+    if (
+        preview_truncated
+        or has_missing_indices
+        or missing
+        or unequal
+        or has_missing_arrays
+        or time_source is None
+    ):
         response.status = "partial"
     return response

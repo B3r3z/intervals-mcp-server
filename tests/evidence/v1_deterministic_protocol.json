@@ -1,0 +1,1495 @@
+{
+  "cases": [
+    {
+      "calls": [
+        {
+          "calls": [
+            {
+              "arguments": {
+                "activity_id": "a-4x8"
+              },
+              "domain_error_code": null,
+              "domain_status": "ok",
+              "finished_at": "2026-09-09T18:57:31.262065+00:00",
+              "http_attempts": 1,
+              "mcp_is_error": false,
+              "output_schema_valid": true,
+              "schema_check": "required",
+              "schema_errors": [],
+              "started_at": "2026-09-09T18:57:31.214104+00:00",
+              "structured_content_present": true,
+              "structured_text_agree": true,
+              "text_content_present": true,
+              "tool": "get_activity_details",
+              "utf8_call_tool_result_bytes": 2305,
+              "utf8_json_text_bytes": 1134
+            },
+            {
+              "arguments": {
+                "activity_id": "a-4x8"
+              },
+              "domain_error_code": null,
+              "domain_status": "ok",
+              "finished_at": "2026-09-09T18:57:31.307257+00:00",
+              "http_attempts": 1,
+              "mcp_is_error": false,
+              "output_schema_valid": true,
+              "schema_check": "required",
+              "schema_errors": [],
+              "started_at": "2026-09-09T18:57:31.266911+00:00",
+              "structured_content_present": true,
+              "structured_text_agree": true,
+              "text_content_present": true,
+              "tool": "get_activity_intervals",
+              "utf8_call_tool_result_bytes": 5051,
+              "utf8_json_text_bytes": 2810
+            },
+            {
+              "arguments": {
+                "activity_id": "a-4x8"
+              },
+              "domain_error_code": null,
+              "domain_status": "ok",
+              "finished_at": "2026-09-09T18:57:31.349084+00:00",
+              "http_attempts": 1,
+              "mcp_is_error": false,
+              "output_schema_valid": true,
+              "schema_check": "required",
+              "schema_errors": [],
+              "started_at": "2026-09-09T18:57:31.307257+00:00",
+              "structured_content_present": true,
+              "structured_text_agree": true,
+              "text_content_present": true,
+              "tool": "get_activity_messages",
+              "utf8_call_tool_result_bytes": 1910,
+              "utf8_json_text_bytes": 932
+            }
+          ],
+          "path": "legacy"
+        },
+        {
+          "calls": [
+            {
+              "arguments": {
+                "activity_id": "a-4x8"
+              },
+              "domain_error_code": null,
+              "domain_status": "ok",
+              "finished_at": "2026-09-09T18:57:32.337634+00:00",
+              "http_attempts": 2,
+              "mcp_is_error": false,
+              "output_schema_valid": true,
+              "schema_check": "required",
+              "schema_errors": [],
+              "started_at": "2026-09-09T18:57:32.282941+00:00",
+              "structured_content_present": true,
+              "structured_text_agree": true,
+              "text_content_present": true,
+              "tool": "get_session_context",
+              "utf8_call_tool_result_bytes": 16862,
+              "utf8_json_text_bytes": 10023
+            }
+          ],
+          "path": "context"
+        }
+      ],
+      "case": "S01",
+      "description": "Four by eight intervals: legacy reads versus one session context call.",
+      "mcp_tool_calls": 4,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "context_comment_fingerprint_present": true,
+        "context_cost": {
+          "mcp_tool_calls": 1,
+          "upstream_http_attempts": 2,
+          "utf8_call_tool_result_bytes": 16862,
+          "utf8_json_text_bytes": 10023
+        },
+        "context_interval_records": 8,
+        "context_sections": [
+          "comments",
+          "details",
+          "intervals"
+        ],
+        "context_status": "ok",
+        "legacy_cost": {
+          "mcp_tool_calls": 3,
+          "upstream_http_attempts": 3,
+          "utf8_call_tool_result_bytes": 9266,
+          "utf8_json_text_bytes": 4876
+        },
+        "legacy_details_do_not_duplicate_intervals": true,
+        "legacy_interval_records": 8,
+        "legacy_message_data_retained": true,
+        "legacy_statuses": [
+          "ok",
+          "ok",
+          "ok"
+        ],
+        "recovery_durations": [
+          420,
+          420,
+          420,
+          420
+        ],
+        "same_fixture_cost_comparison": "3MCP/3GET versus 1MCP/2GET",
+        "work_durations": [
+          480,
+          480,
+          480,
+          480
+        ],
+        "work_heartrate": [
+          154,
+          155,
+          156,
+          157
+        ],
+        "work_watts": [
+          315,
+          318,
+          321,
+          324
+        ]
+      },
+      "upstream_http_attempts": 5,
+      "utf8_call_tool_result_bytes": 26128,
+      "utf8_json_text_bytes": 14899
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-fragment",
+            "end_index": 40,
+            "start_index": 10
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:33.361027+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:33.308949+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_interval_stats",
+          "utf8_call_tool_result_bytes": 4270,
+          "utf8_json_text_bytes": 2170
+        },
+        {
+          "arguments": {
+            "activity_id": "a-fragment",
+            "end_index": 40,
+            "mode": "range",
+            "start_index": 10,
+            "stream_types": "time,watts"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:33.405028+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:33.363001+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 7307,
+          "utf8_json_text_bytes": 4301
+        }
+      ],
+      "case": "S02",
+      "description": "Half-open sample-index fragment with interval bounds and time mapping.",
+      "mcp_tool_calls": 2,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "follow_up": {
+          "parameters": {
+            "activity_id": "a-fragment",
+            "end_index": 40,
+            "mode": "range",
+            "start_index": 10,
+            "stream_types": "time"
+          },
+          "purpose": "map sample indices to elapsed time",
+          "tool": "get_activity_streams"
+        },
+        "returned_bounds": {
+          "matched": true,
+          "requested": {
+            "end_index": 40,
+            "start_index": 10
+          },
+          "returned": {
+            "end_index": 40,
+            "start_index": 10
+          }
+        },
+        "returned_sample_count": 30,
+        "returned_time_values": [
+          10.0,
+          11.0,
+          12.0,
+          13.0,
+          14.0,
+          15.0,
+          16.0,
+          17.0,
+          18.0,
+          19.0,
+          20.0,
+          21.0,
+          22.0,
+          23.0,
+          24.0,
+          25.0,
+          26.0,
+          27.0,
+          28.0,
+          29.0,
+          30.0,
+          31.0,
+          32.0,
+          33.0,
+          34.0,
+          35.0,
+          36.0,
+          37.0,
+          38.0,
+          39.0
+        ],
+        "statuses": [
+          "ok",
+          "ok"
+        ]
+      },
+      "upstream_http_attempts": 2,
+      "utf8_call_tool_result_bytes": 11577,
+      "utf8_json_text_bytes": 6471
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-best5",
+            "duration": 300,
+            "stream": "watts"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:34.386274+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:34.349266+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_best_efforts",
+          "utf8_call_tool_result_bytes": 2897,
+          "utf8_json_text_bytes": 1490
+        },
+        {
+          "arguments": {
+            "activity_type": "Ride",
+            "detail": "compact",
+            "durations": [
+              300,
+              600
+            ],
+            "end_date": "2026-09-08",
+            "include_normalised": true,
+            "last_season": false,
+            "start_date": "2026-08-01",
+            "this_season": true
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:34.427513+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:34.386274+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_athlete_power_curves",
+          "utf8_call_tool_result_bytes": 3159,
+          "utf8_json_text_bytes": 1665
+        }
+      ],
+      "case": "S03",
+      "description": "Best five-minute effort and historical athlete power curve.",
+      "mcp_tool_calls": 2,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "curve_missing_durations": [
+          600
+        ],
+        "curve_requested_query_preserved": true,
+        "curve_returned_point_durations": [
+          300
+        ],
+        "effort_units": {
+          "average": "W",
+          "distance": "m",
+          "duration": "s",
+          "index": "sample_index"
+        },
+        "historical_curve_activity_ids": [
+          "a-history-300"
+        ],
+        "historical_curve_period": {
+          "end": "2026-09-08",
+          "start": "2026-08-01"
+        },
+        "historical_curve_watts": [
+          330
+        ],
+        "returned_effort_average": 345,
+        "returned_effort_duration": 300,
+        "statuses": [
+          "ok",
+          "partial"
+        ]
+      },
+      "upstream_http_attempts": 2,
+      "utf8_call_tool_result_bytes": 6056,
+      "utf8_json_text_bytes": 3155
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-fatigue",
+            "detail": "compact",
+            "durations": [
+              300,
+              600
+            ],
+            "fatigue": [
+              "normal",
+              "kj0",
+              "kj1"
+            ]
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:35.448105+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:35.401730+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_power_curves",
+          "utf8_call_tool_result_bytes": 10503,
+          "utf8_json_text_bytes": 6103
+        }
+      ],
+      "case": "S04",
+      "description": "Activity power curves with explicit fatigue selectors and thresholds.",
+      "mcp_tool_calls": 1,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "returned_300_watts": [
+          410,
+          390,
+          370
+        ],
+        "returned_after_kj": [
+          null,
+          246,
+          480
+        ],
+        "returned_bounds_at_300": [
+          {
+            "end_index": 300,
+            "start_index": 0
+          },
+          {
+            "end_index": 900,
+            "start_index": 600
+          },
+          {
+            "end_index": 1500,
+            "start_index": 1200
+          }
+        ],
+        "selection": {
+          "basis": "explicit curve fatigue fields only; curve IDs and after_kj are not selectors",
+          "requested_fatigue": [
+            "normal",
+            "kj0",
+            "kj1"
+          ],
+          "returned_fatigue": [],
+          "verified": false
+        },
+        "status": "partial",
+        "warnings": [
+          "FATIGUE_SELECTION_UNVERIFIED",
+          "FATIGUE_THRESHOLD_UNAVAILABLE"
+        ]
+      },
+      "upstream_http_attempts": 1,
+      "utf8_call_tool_result_bytes": 10503,
+      "utf8_json_text_bytes": 6103
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-plan",
+            "athlete_id": "i123",
+            "sections": [
+              "details",
+              "intervals",
+              "plan"
+            ]
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:36.463702+00:00",
+          "http_attempts": 4,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:36.395859+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_session_context",
+          "utf8_call_tool_result_bytes": 18905,
+          "utf8_json_text_bytes": 11265
+        },
+        {
+          "arguments": {
+            "athlete_id": "i123",
+            "sport": "Ride"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:36.504703+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:36.465704+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_sport_settings",
+          "utf8_call_tool_result_bytes": 4053,
+          "utf8_json_text_bytes": 2098
+        }
+      ],
+      "case": "S05",
+      "description": "Plan targets keep activity, event/workout, and current settings scopes distinct.",
+      "mcp_tool_calls": 2,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "current_settings_ftp": 280,
+        "decoy_excluded": true,
+        "ftp_scopes": {
+          "activity": 245,
+          "event": 260,
+          "workout_document": 260
+        },
+        "paired_event_ids": {
+          "raw": 9001,
+          "resolved": 9001
+        },
+        "plan_thresholds": {
+          "activity_assigned": {
+            "athlete_max_hr": {
+              "unit": "bpm",
+              "value": 190
+            },
+            "icu_ftp": {
+              "unit": "W",
+              "value": 245
+            },
+            "lthr": {
+              "unit": "bpm",
+              "value": 165
+            }
+          },
+          "current_sport_settings": {
+            "reason": "current settings are not substituted for stored plan values",
+            "status": "not_requested"
+          },
+          "event_provided": {
+            "icu_ftp": {
+              "unit": "W",
+              "value": 260
+            }
+          },
+          "workout_document": {
+            "ftp": {
+              "unit": "W",
+              "value": 260
+            },
+            "lthr": {
+              "unit": "bpm",
+              "value": 166
+            },
+            "pace_units": {
+              "unit": "display_unit_enum",
+              "value": "MINS_KM"
+            },
+            "threshold_pace": {
+              "unit": "m/s",
+              "value": 4.1
+            }
+          }
+        },
+        "resolved_power_target": {
+          "end": 226,
+          "start": 216,
+          "value": 221
+        },
+        "statuses": [
+          "ok",
+          "ok"
+        ]
+      },
+      "upstream_http_attempts": 5,
+      "utf8_call_tool_result_bytes": 22958,
+      "utf8_json_text_bytes": 13363
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-hr",
+            "include_intervals": true
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:37.516026+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:37.465527+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_details",
+          "utf8_call_tool_result_bytes": 2539,
+          "utf8_json_text_bytes": 1282
+        },
+        {
+          "arguments": {
+            "activity_id": "a-hr",
+            "mode": "preview",
+            "stream_types": "time,heartrate"
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:37.556049+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:37.517049+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 6457,
+          "utf8_json_text_bytes": 3671
+        }
+      ],
+      "case": "S06",
+      "description": "Heart-rate intensity uses historical activity fields and an explicit bpm stream.",
+      "mcp_tool_calls": 2,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "athlete_max_hr": 190,
+        "heart_rate_samples_returned": [
+          140,
+          145,
+          150,
+          155,
+          160,
+          168,
+          170,
+          172,
+          174,
+          175
+        ],
+        "heartrate_unit": "bpm",
+        "historical_power_missing": true,
+        "icu_hr_zone_times": [
+          300,
+          700,
+          600,
+          200
+        ],
+        "icu_hr_zones": [
+          120,
+          145,
+          165,
+          180
+        ],
+        "lthr": 165,
+        "moving_vs_elapsed": {
+          "elapsed_time": 2100,
+          "moving_time": 1800
+        },
+        "opaque_load_code": 17,
+        "statuses": [
+          "ok",
+          "partial"
+        ]
+      },
+      "upstream_http_attempts": 2,
+      "utf8_call_tool_result_bytes": 8996,
+      "utf8_json_text_bytes": 4953
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-hidden"
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:38.567595+00:00",
+          "http_attempts": 3,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:38.519597+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_session_context",
+          "utf8_call_tool_result_bytes": 11319,
+          "utf8_json_text_bytes": 6472
+        },
+        {
+          "arguments": {
+            "activity_id": "a-hidden",
+            "stream_types": "time,watts"
+          },
+          "domain_error_code": "HTTP_403",
+          "domain_status": "error",
+          "finished_at": "2026-09-09T18:57:38.607616+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "recommended_action_present": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:38.569597+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 1649,
+          "utf8_json_text_bytes": 791
+        }
+      ],
+      "case": "S07",
+      "description": "Hidden source record keeps identity while stream access remains a source limitation.",
+      "mcp_tool_calls": 2,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "detail_source_reasons": [
+          "source_record_hidden"
+        ],
+        "detail_status": "partial",
+        "detail_warnings": [
+          "SOURCE_DATA_LIMITED"
+        ],
+        "hidden_warning_retained": true,
+        "statuses": [
+          "partial",
+          "error"
+        ],
+        "stream_error_code": "HTTP_403",
+        "stream_recommended_action": "check credentials"
+      },
+      "upstream_http_attempts": 4,
+      "utf8_call_tool_result_bytes": 12968,
+      "utf8_json_text_bytes": 7263
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-irregular",
+            "mode": "preview",
+            "stream_types": "time,watts"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:39.643721+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:39.588954+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 6343,
+          "utf8_json_text_bytes": 3595
+        },
+        {
+          "arguments": {
+            "activity_id": "a-irregular",
+            "end_index": 6,
+            "expected_snapshot_id": "08c334a0dc92298731b4c37188b0b31769daee43050c5817a6558615b270fc38",
+            "mode": "range",
+            "start_index": 0,
+            "stream_types": "time,watts"
+          },
+          "domain_error_code": "SNAPSHOT_CHANGED",
+          "domain_status": "error",
+          "finished_at": "2026-09-09T18:57:39.688626+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "recommended_action_present": false,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:39.645723+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 1575,
+          "utf8_json_text_bytes": 755
+        },
+        {
+          "arguments": {
+            "activity_id": "a-irregular",
+            "end_index": 6,
+            "mode": "range",
+            "start_index": 0,
+            "stream_types": "time,watts"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:39.730520+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:39.688626+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 6323,
+          "utf8_json_text_bytes": 3585
+        }
+      ],
+      "case": "S08",
+      "description": "Irregular raw time values and a persisted changed snapshot remain visible.",
+      "mcp_tool_calls": 3,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "error_codes": [
+          null,
+          "SNAPSHOT_CHANGED",
+          null
+        ],
+        "raw_time_limitations_preserved": true,
+        "snapshot_ids": [
+          "08c334a0dc92298731b4c37188b0b31769daee43050c5817a6558615b270fc38",
+          null,
+          "f20fbae0558d295c1021868fe854be95bcb0c1b9eed0818f669803d708c287ef"
+        ],
+        "statuses": [
+          "ok",
+          "error",
+          "ok"
+        ]
+      },
+      "upstream_http_attempts": 3,
+      "utf8_call_tool_result_bytes": 14241,
+      "utf8_json_text_bytes": 7935
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-large",
+            "mode": "preview",
+            "stream_types": "time,watts,raw_watts,custom_large"
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:40.827858+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:40.761738+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 11945,
+          "utf8_json_text_bytes": 7074
+        },
+        {
+          "arguments": {
+            "activity_id": "a-large",
+            "end_index": 200,
+            "mode": "range",
+            "start_index": 100,
+            "stream_types": "time,watts"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:40.869699+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:40.829867+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 16679,
+          "utf8_json_text_bytes": 11058
+        },
+        {
+          "arguments": {
+            "activity_id": "a-large",
+            "end_index": 10001,
+            "mode": "range",
+            "start_index": 0,
+            "stream_types": "time,watts"
+          },
+          "domain_error_code": "RANGE_TOO_LARGE",
+          "domain_status": "error",
+          "finished_at": "2026-09-09T18:57:40.917580+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "recommended_action_present": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:40.869699+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 1777,
+          "utf8_json_text_bytes": 855
+        },
+        {
+          "arguments": {
+            "activity_id": "a-large",
+            "end_index": 1,
+            "mode": "range",
+            "start_index": true,
+            "stream_types": "time,watts"
+          },
+          "domain_status": null,
+          "finished_at": "2026-09-09T18:57:40.917580+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": true,
+          "output_schema_valid": null,
+          "schema_check": "not_applicable",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:40.917580+00:00",
+          "structured_content_present": false,
+          "structured_text_agree": null,
+          "text_content_present": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 397,
+          "utf8_json_text_bytes": 270
+        },
+        {
+          "arguments": {
+            "activity_id": "a-large"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:40.979427+00:00",
+          "http_attempts": 2,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:40.917580+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "export_activity_data",
+          "utf8_call_tool_result_bytes": 5364,
+          "utf8_json_text_bytes": 2791
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 0
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.027411+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:40.979427+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91654,
+          "utf8_json_text_bytes": 45844
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 32768
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.059366+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.027411+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91670,
+          "utf8_json_text_bytes": 45852
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 65536
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.108435+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.059366+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91670,
+          "utf8_json_text_bytes": 45852
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 98304
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.146215+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.110444+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91674,
+          "utf8_json_text_bytes": 45854
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 131072
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.186763+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.148219+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91678,
+          "utf8_json_text_bytes": 45856
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 163840
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.213586+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.188764+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91678,
+          "utf8_json_text_bytes": 45856
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 196608
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.260894+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.213586+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91678,
+          "utf8_json_text_bytes": 45856
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 229376
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.300275+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.260894+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91678,
+          "utf8_json_text_bytes": 45856
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 262144
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:41.338847+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.302275+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 91678,
+          "utf8_json_text_bytes": 45856
+        },
+        {
+          "arguments": {
+            "artifact_id": "7cbdb3992b31a16443ab8d79950be4d6",
+            "max_bytes": 32768,
+            "offset": 294912
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:41.370732+00:00",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:41.340857+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_artifact_chunk",
+          "utf8_call_tool_result_bytes": 15856,
+          "utf8_json_text_bytes": 7944
+        }
+      ],
+      "case": "S09",
+      "description": "Large stream preview, bounded range, local range rejection, and artifact chunks.",
+      "mcp_tool_calls": 15,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "artifact_bytes": 299283,
+        "artifact_chunks": 10,
+        "artifact_sha256": "01e1228923a183c592ce05a0053ebfaae2064050a28cf952cc4a1e319869db4b",
+        "bounded_range_status": "ok",
+        "chunk_artifact_hashes_match": true,
+        "chunk_hashes_match": true,
+        "data2_preserved": true,
+        "duplicate_watts_preserved": true,
+        "export_status": "ok",
+        "full_stream_sample_counts": [
+          {
+            "data2_count": null,
+            "data_count": 10005,
+            "type": "time"
+          },
+          {
+            "data2_count": null,
+            "data_count": 10005,
+            "type": "watts"
+          },
+          {
+            "data2_count": 10005,
+            "data_count": 10005,
+            "type": "watts"
+          },
+          {
+            "data2_count": null,
+            "data_count": 10005,
+            "type": "raw_watts"
+          },
+          {
+            "data2_count": null,
+            "data_count": 10006,
+            "type": "custom_large"
+          }
+        ],
+        "large_custom_stream_preserved": true,
+        "manifest_hash_matches": true,
+        "oversized_range": {
+          "error_code": "RANGE_TOO_LARGE",
+          "http_attempts": 0,
+          "mcp_is_error": false,
+          "status": "error"
+        },
+        "parameter_validation": {
+          "http_attempts": 0,
+          "mcp_is_error": true,
+          "schema_check": "not_applicable",
+          "structured_content_present": false
+        },
+        "preview_status": "partial",
+        "preview_truncated": true
+      },
+      "upstream_http_attempts": 4,
+      "utf8_call_tool_result_bytes": 877076,
+      "utf8_json_text_bytes": 442674
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "athlete_id": "i123",
+            "detail": "compact"
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:42.416959+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:42.367021+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_custom_items",
+          "utf8_call_tool_result_bytes": 3028,
+          "utf8_json_text_bytes": 1595
+        },
+        {
+          "arguments": {
+            "athlete_id": "i123",
+            "detail": "full",
+            "item_id": 501
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:42.458940+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:42.418948+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_custom_item_by_id",
+          "utf8_call_tool_result_bytes": 2946,
+          "utf8_json_text_bytes": 1518
+        }
+      ],
+      "case": "S10",
+      "description": "Custom definition content is structured and retained as untrusted data.",
+      "mcp_tool_calls": 2,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "compact_full_follow_up_present": true,
+        "full_unknown_fields_preserved": true,
+        "missing_metadata_reported": true,
+        "script_preserved_as_data": true,
+        "statuses": [
+          "partial",
+          "partial"
+        ]
+      },
+      "upstream_http_attempts": 2,
+      "utf8_call_tool_result_bytes": 5974,
+      "utf8_json_text_bytes": 3113
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-strength"
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:43.511738+00:00",
+          "http_attempts": 3,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:43.451938+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_session_context",
+          "utf8_call_tool_result_bytes": 12653,
+          "utf8_json_text_bytes": 7294
+        },
+        {
+          "arguments": {
+            "activity_id": "a-strength",
+            "detail": "full",
+            "sections": [
+              "details"
+            ]
+          },
+          "domain_error_code": null,
+          "domain_status": "ok",
+          "finished_at": "2026-09-09T18:57:43.552738+00:00",
+          "http_attempts": 1,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:43.513729+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_session_context",
+          "utf8_call_tool_result_bytes": 6274,
+          "utf8_json_text_bytes": 3518
+        }
+      ],
+      "case": "S11",
+      "description": "Strength activity aggregate is preserved without inventing set-level records.",
+      "mcp_tool_calls": 2,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "description": "Recorded strength work: squat and press; set-level records were not supplied.",
+        "full_source_has_no_set_fields": true,
+        "kg_lifted": 1200,
+        "set_level_records_supplied": false,
+        "status": "ok",
+        "type": "WeightTraining"
+      },
+      "upstream_http_attempts": 4,
+      "utf8_call_tool_result_bytes": 18927,
+      "utf8_json_text_bytes": 10812
+    },
+    {
+      "calls": [
+        {
+          "arguments": {
+            "activity_id": "a-error-shape",
+            "sections": [
+              "details",
+              "comments"
+            ]
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:44.586801+00:00",
+          "http_attempts": 2,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:44.528475+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_session_context",
+          "utf8_call_tool_result_bytes": 7024,
+          "utf8_json_text_bytes": 3941
+        },
+        {
+          "arguments": {
+            "activity_id": "a-error-timeout",
+            "sections": [
+              "details",
+              "comments"
+            ]
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:44.633800+00:00",
+          "http_attempts": 4,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:44.587802+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_session_context",
+          "utf8_call_tool_result_bytes": 6788,
+          "utf8_json_text_bytes": 3804
+        },
+        {
+          "arguments": {
+            "activity_id": "a-error-rate",
+            "sections": [
+              "details",
+              "comments"
+            ]
+          },
+          "domain_error_code": null,
+          "domain_status": "partial",
+          "finished_at": "2026-09-09T18:57:45.455009+00:00",
+          "http_attempts": 4,
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_check": "required",
+          "schema_errors": [],
+          "started_at": "2026-09-09T18:57:44.635802+00:00",
+          "structured_content_present": true,
+          "structured_text_agree": true,
+          "text_content_present": true,
+          "tool": "get_session_context",
+          "utf8_call_tool_result_bytes": 6816,
+          "utf8_json_text_bytes": 3818
+        }
+      ],
+      "case": "S12",
+      "description": "Malformed payload, timeout retries, and rate-limit retries retain sections and actions.",
+      "mcp_tool_calls": 3,
+      "measurement_boundary": "MCP tools/call and upstream HTTP attempts only; initialize, tools/list, and JSON-RPC framing are excluded. UTF-8 text bytes include the plain FastMCP parameter-validation text in S09; other calls use JSON text.",
+      "observations": {
+        "context_http_attempts": [
+          2,
+          4,
+          4
+        ],
+        "recommended_actions": [
+          null,
+          "retry read",
+          "retry read"
+        ],
+        "section_error_codes": [
+          "INVALID_UPSTREAM_RESPONSE",
+          "READ_TIMEOUT",
+          "HTTP_429"
+        ],
+        "section_statuses": [
+          {
+            "comments": "ok",
+            "details": "error"
+          },
+          {
+            "comments": "ok",
+            "details": "error"
+          },
+          {
+            "comments": "ok",
+            "details": "error"
+          }
+        ],
+        "statuses": [
+          "partial",
+          "partial",
+          "partial"
+        ]
+      },
+      "upstream_http_attempts": 10,
+      "utf8_call_tool_result_bytes": 20628,
+      "utf8_json_text_bytes": 11563
+    }
+  ],
+  "fixture": "synthetic httpx.MockTransport; non-fixture requests fail closed",
+  "private_state": "request logs, audit, artifact, and operation directories are excluded from this report",
+  "protocol": "MCP ClientSession over stdio",
+  "totals": {
+    "mcp_tool_calls": 40,
+    "upstream_http_attempts": 44,
+    "utf8_call_tool_result_bytes": 1036032,
+    "utf8_json_text_bytes": 532304
+  }
+}

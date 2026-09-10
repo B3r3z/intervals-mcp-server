@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from intervals_mcp_server.api.client import make_intervals_request
 from intervals_mcp_server.config import get_config
-from intervals_mcp_server.mcp_instance import mcp
+from intervals_mcp_server.catalogue import coach_tool
 from intervals_mcp_server.operations import (
     AccountWriteLock,
     JournalCorruptError,
@@ -718,7 +718,7 @@ async def _apply_workout_change(
             lock.release()
 
 
-@mcp.tool()
+@coach_tool(access="safe_write", upstream="write", local="write")
 async def apply_workout_changes(
     decision_uid: str,
     operations: list[OperationIntent],
@@ -822,7 +822,7 @@ async def apply_workout_changes(
         lock.release()
 
 
-@mcp.tool()
+@coach_tool(access="write_status", upstream="read", local="write")
 async def get_write_status(operation_uid: str, reconcile: bool = False) -> WriteStatusResponse:
     """Read durable write status; reconciliation performs reads only."""
     config = get_config()

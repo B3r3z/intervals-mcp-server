@@ -1,36 +1,50 @@
 {
-  "projection_version": 1,
-  "source": {
-    "sha256": "2ADB2740529E1ADD18E790ECA75D17FA9D28D700DC464791DB5BD6767C1C7B50",
-    "openapi": "3.0.1",
-    "title": "Intervals.icu API",
-    "version": "v1.0.0",
-    "servers": [
-      {
-        "url": "https://intervals.icu"
+  "exceptions": [
+    {
+      "id": "blank-json-suffix",
+      "rationale": "The server requests JSON by using a blank ext/format suffix; this is also the shape used by reviewed Intervals examples.",
+      "scope": {
+        "operations": [
+          "GET /api/v1/activity/{id}/streams{ext}",
+          "GET /api/v1/activity/{id}/power-curves{ext}",
+          "GET /api/v1/athlete/{id}/events{format}",
+          "GET /api/v1/athlete/{id}/power-curves{ext}",
+          "GET /api/v1/athlete/{id}/wellness{ext}"
+        ],
+        "parameters": [
+          "ext",
+          "format"
+        ]
       }
-    ]
-  },
-  "security": {
-    "root": [
-      {
-        "APIKey": [],
-        "AccessToken": []
+    },
+    {
+      "id": "power-curves-generated-filter-requirements",
+      "rationale": "The generated contract marks f1/f2/f3 as required, but the current implementation and reviewed Intervals examples omit them. The required type query parameter is not exempt.",
+      "scope": {
+        "operations": [
+          "GET /api/v1/athlete/{id}/power-curves{ext}"
+        ],
+        "parameters": [
+          "f1",
+          "f2",
+          "f3"
+        ]
       }
-    ],
-    "schemes": {
-      "APIKey": {
-        "type": "http",
-        "scheme": "basic",
-        "description": "Username is API_KEY, Password is your API key found in /settings"
-      },
-      "AccessToken": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "Use bearer token for an athlete from OAuth flow"
+    },
+    {
+      "id": "root-security-and-vs-api-key",
+      "rationale": "The root OpenAPI security object combines APIKey and AccessToken, while this personal server intentionally authenticates with the documented Basic APIKey scheme.",
+      "scope": {
+        "root_security": [
+          {
+            "APIKey": [],
+            "AccessToken": []
+          }
+        ],
+        "selected_server_scheme": "APIKey"
       }
     }
-  },
+  ],
   "operations": [
     {
       "method": "GET",
@@ -64,8 +78,8 @@
     },
     {
       "method": "GET",
-      "operationId": "listActivityMessages",
-      "path": "/api/v1/activity/{id}/messages",
+      "operationId": "getIntervalStats",
+      "path": "/api/v1/activity/{id}/interval-stats",
       "required_parameters": [
         {
           "in": "path",
@@ -74,12 +88,74 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "in": "query",
+          "name": "end_index",
+          "required": true,
+          "schema": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "start_index",
+          "required": true,
+          "schema": {
+            "format": "int32",
+            "type": "integer"
+          }
         }
       ]
     },
     {
-      "method": "POST",
-      "operationId": "sendActivityMessage",
+      "method": "GET",
+      "operationId": "findBestEfforts",
+      "path": "/api/v1/activity/{id}/best-efforts",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "query",
+          "name": "stream",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listActivityMessages",
+      "optional_parameters": [
+        {
+          "in": "query",
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "default": 100,
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        {
+          "in": "query",
+          "name": "sinceId",
+          "required": false,
+          "schema": {
+            "format": "int64",
+            "type": "integer"
+          }
+        }
+      ],
       "path": "/api/v1/activity/{id}/messages",
       "required_parameters": [
         {
@@ -91,12 +167,78 @@
           }
         }
       ],
-      "request_schema": "NewActivityMsg"
+      "responses": {
+        "200": {
+          "content": {
+            "*/*": {
+              "schema": {
+                "items": {
+                  "$ref": "#/components/schemas/Message"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "description": "OK"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "operationId": "sendActivityMessage",
+      "optional_parameters": [],
+      "path": "/api/v1/activity/{id}/messages",
+      "request_schema": "NewActivityMsg",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/NewMsg"
+              }
+            }
+          },
+          "description": "OK"
+        }
+      }
     },
     {
       "method": "GET",
       "operationId": "getActivityStreams",
       "path": "/api/v1/activity/{id}/streams{ext}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "ext",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "listActivityPowerCurves_1",
+      "path": "/api/v1/activity/{id}/power-curves{ext}",
       "required_parameters": [
         {
           "in": "path",
@@ -166,6 +308,7 @@
       "method": "POST",
       "operationId": "createEvent",
       "path": "/api/v1/athlete/{id}/events",
+      "request_schema": "EventEx",
       "required_parameters": [
         {
           "in": "path",
@@ -183,8 +326,7 @@
             "type": "boolean"
           }
         }
-      ],
-      "request_schema": "EventEx"
+      ]
     },
     {
       "method": "GET",
@@ -196,8 +338,8 @@
           "name": "eventId",
           "required": true,
           "schema": {
-            "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "type": "integer"
           }
         },
         {
@@ -214,14 +356,15 @@
       "method": "PUT",
       "operationId": "updateEvent",
       "path": "/api/v1/athlete/{id}/events/{eventId}",
+      "request_schema": "EventEx",
       "required_parameters": [
         {
           "in": "path",
           "name": "eventId",
           "required": true,
           "schema": {
-            "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "type": "integer"
           }
         },
         {
@@ -232,8 +375,7 @@
             "type": "string"
           }
         }
-      ],
-      "request_schema": "EventEx"
+      ]
     },
     {
       "method": "DELETE",
@@ -245,8 +387,8 @@
           "name": "eventId",
           "required": true,
           "schema": {
-            "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "type": "integer"
           }
         },
         {
@@ -308,10 +450,10 @@
           "name": "f1",
           "required": true,
           "schema": {
-            "type": "array",
             "items": {
               "type": "object"
-            }
+            },
+            "type": "array"
           }
         },
         {
@@ -319,10 +461,10 @@
           "name": "f2",
           "required": true,
           "schema": {
-            "type": "array",
             "items": {
               "type": "object"
-            }
+            },
+            "type": "array"
           }
         },
         {
@@ -330,15 +472,38 @@
           "name": "f3",
           "required": true,
           "schema": {
-            "type": "array",
             "items": {
               "type": "object"
-            }
+            },
+            "type": "array"
           }
         },
         {
           "in": "query",
           "name": "type",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "method": "GET",
+      "operationId": "getSettings_1",
+      "path": "/api/v1/athlete/{athleteId}/sport-settings/{id}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "athleteId",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
           "required": true,
           "schema": {
             "type": "string"
@@ -365,6 +530,7 @@
       "method": "POST",
       "operationId": "createCustomItem",
       "path": "/api/v1/athlete/{id}/custom-item",
+      "request_schema": "CustomItem",
       "required_parameters": [
         {
           "in": "path",
@@ -374,8 +540,7 @@
             "type": "string"
           }
         }
-      ],
-      "request_schema": "CustomItem"
+      ]
     },
     {
       "method": "GET",
@@ -395,8 +560,8 @@
           "name": "itemId",
           "required": true,
           "schema": {
-            "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "type": "integer"
           }
         }
       ]
@@ -405,6 +570,7 @@
       "method": "PUT",
       "operationId": "updateCustomItem",
       "path": "/api/v1/athlete/{id}/custom-item/{itemId}",
+      "request_schema": "CustomItem",
       "required_parameters": [
         {
           "in": "path",
@@ -419,12 +585,11 @@
           "name": "itemId",
           "required": true,
           "schema": {
-            "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "type": "integer"
           }
         }
-      ],
-      "request_schema": "CustomItem"
+      ]
     },
     {
       "method": "DELETE",
@@ -444,13 +609,104 @@
           "name": "itemId",
           "required": true,
           "schema": {
-            "type": "integer",
-            "format": "int32"
+            "format": "int32",
+            "type": "integer"
           }
         }
       ]
     }
   ],
+  "projection_version": 1,
+  "response_schemas": {
+    "Message": {
+      "properties": {
+        "accept_coaching_group_id": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "activity": {
+          "$ref": "#/components/schemas/Activity"
+        },
+        "activity_id": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
+        },
+        "athlete_id": {
+          "type": "string"
+        },
+        "attachment_mime_type": {
+          "type": "string"
+        },
+        "attachment_url": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "created": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "deleted": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "deleted_by_id": {
+          "type": "string"
+        },
+        "end_index": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "join_group_id": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "seen": {
+          "type": "boolean"
+        },
+        "start_index": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "type": {
+          "enum": [
+            "TEXT",
+            "FOLLOW_REQ",
+            "COACH_REQ",
+            "COACH_ME_REQ",
+            "ACTIVITY",
+            "NOTE",
+            "JOIN_REQ",
+            "ACCEPT_COACHING_GROUP"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "NewMsg": {
+      "properties": {
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "new_chat": {
+          "$ref": "#/components/schemas/Chat"
+        }
+      },
+      "type": "object"
+    }
+  },
   "schemas": {
     "CustomItem": {
       "allowed_fields": [
@@ -548,49 +804,35 @@
       "required_fields": []
     }
   },
-  "exceptions": [
-    {
-      "id": "blank-json-suffix",
-      "scope": {
-        "operations": [
-          "GET /api/v1/activity/{id}/streams{ext}",
-          "GET /api/v1/athlete/{id}/events{format}",
-          "GET /api/v1/athlete/{id}/power-curves{ext}",
-          "GET /api/v1/athlete/{id}/wellness{ext}"
-        ],
-        "parameters": [
-          "ext",
-          "format"
-        ]
+  "security": {
+    "root": [
+      {
+        "APIKey": [],
+        "AccessToken": []
+      }
+    ],
+    "schemes": {
+      "APIKey": {
+        "description": "Username is API_KEY, Password is your API key found in /settings",
+        "scheme": "basic",
+        "type": "http"
       },
-      "rationale": "The server requests JSON by using a blank ext/format suffix; this is also the shape used by reviewed Intervals examples."
-    },
-    {
-      "id": "power-curves-generated-filter-requirements",
-      "scope": {
-        "operations": [
-          "GET /api/v1/athlete/{id}/power-curves{ext}"
-        ],
-        "parameters": [
-          "f1",
-          "f2",
-          "f3"
-        ]
-      },
-      "rationale": "The generated contract marks f1/f2/f3 as required, but the current implementation and reviewed Intervals examples omit them. The required type query parameter is not exempt."
-    },
-    {
-      "id": "root-security-and-vs-api-key",
-      "scope": {
-        "root_security": [
-          {
-            "APIKey": [],
-            "AccessToken": []
-          }
-        ],
-        "selected_server_scheme": "APIKey"
-      },
-      "rationale": "The root OpenAPI security object combines APIKey and AccessToken, while this personal server intentionally authenticates with the documented Basic APIKey scheme."
+      "AccessToken": {
+        "description": "Use bearer token for an athlete from OAuth flow",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
-  ]
+  },
+  "source": {
+    "openapi": "3.0.1",
+    "servers": [
+      {
+        "url": "https://intervals.icu"
+      }
+    ],
+    "sha256": "2ADB2740529E1ADD18E790ECA75D17FA9D28D700DC464791DB5BD6767C1C7B50",
+    "title": "Intervals.icu API",
+    "version": "v1.0.0"
+  }
 }

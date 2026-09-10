@@ -87,6 +87,46 @@ def failure(*, resource: str, code: str, message: str, phase: str,
                             source_complete_within_query=None, response_complete=False,
                             reasons=[code]), warnings=warnings or [],
                         error=ErrorInfo(code=code, message=message, phase=phase,
-                                        http_status=http_status,
-                                        recommended_action=recommended_action))
+                                         http_status=http_status,
+                                         recommended_action=recommended_action))
 
+
+def upstream_failure(
+    value: Any,
+    *,
+    resource: str,
+    athlete_id: str | None = None,
+    query: dict[str, Any] | None = None,
+) -> ReadResponse[list[Any]] | None:
+    """Adapt the API client's structured error without dropping its guidance."""
+    if not isinstance(value, dict) or not value.get("error"):
+        return None
+    return failure(
+        resource=resource,
+        athlete_id=athlete_id,
+        query=query,
+        code=str(value.get("code", "UPSTREAM_ERROR")),
+        message=str(value.get("message", "upstream request failed")),
+        phase=str(value.get("phase", "http")),
+        http_status=value.get("http_status") or value.get("status_code"),
+        recommended_action=value.get("recommended_action"),
+    )
+
+
+def invalid_upstream_response(
+    *,
+    resource: str,
+    message: str,
+    athlete_id: str | None = None,
+    query: dict[str, Any] | None = None,
+    code: str = "INVALID_UPSTREAM_RESPONSE",
+) -> ReadResponse[list[Any]]:
+    """Return a fail-closed response for a payload with no supported shape."""
+    return failure(
+        resource=resource,
+        athlete_id=athlete_id,
+        query=query,
+        code=code,
+        message=message,
+        phase="response",
+    )

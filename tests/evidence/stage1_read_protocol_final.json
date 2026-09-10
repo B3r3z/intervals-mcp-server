@@ -1,0 +1,244 @@
+{
+  "analytics_a1_probe": {
+    "domain_status": "ok",
+    "invalid_mcp_is_error": true,
+    "invalid_structured_content_present": false,
+    "invalid_text_content_present": true,
+    "mcp_is_error": false,
+    "output_schema_valid": true,
+    "raw_interval_preserved": true,
+    "structured_text_agree": true,
+    "upstream_requests": 1,
+    "utf8_call_tool_result_bytes": 4190,
+    "utf8_json_text_bytes": 2123
+  },
+  "analytics_a2_probe": {
+    "invalid_mcp_is_error": true,
+    "invalid_structured_content_present": false,
+    "invalid_text_content_present": true,
+    "null_average_preserved": true,
+    "success_domain_status": "partial",
+    "success_mcp_is_error": false,
+    "success_output_schema_valid": true,
+    "success_structured_text_agree": true,
+    "success_utf8_call_tool_result_bytes": 3091,
+    "success_utf8_json_text_bytes": 1597,
+    "upstream_requests": 1
+  },
+  "full_power_curve_probe": {
+    "full_raw_curve_available": true,
+    "mcp_is_error": false,
+    "output_schema_valid": true,
+    "structured_text_agree": true,
+    "upstream_requests": 1,
+    "utf8_json_text_bytes": 3017
+  },
+  "input_validation_probe": {
+    "mcp_is_error": true,
+    "structured_content_present": false,
+    "text_content_present": true,
+    "upstream_requests": 0
+  },
+  "measurement_notes": {
+    "mcp_calls": "Public tools/call requests only; initialize and tools/list excluded.",
+    "mcp_is_error": "Transport/tool execution error; domain status:error is separate.",
+    "utf8_call_tool_result_bytes": "Canonical JSON bytes for CallToolResult content, structuredContent, isError, and metadata; JSON-RPC framing excluded.",
+    "utf8_json_text_bytes": "Bytes in the single JSON text content block."
+  },
+  "protocol": "MCP ClientSession over stdio",
+  "scenarios": {
+    "activity_session": {
+      "calls": [
+        {
+          "domain_status": "partial",
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_errors": [],
+          "structured_text_agree": true,
+          "tool": "get_activity_details",
+          "utf8_call_tool_result_bytes": 2100,
+          "utf8_json_text_bytes": 1030
+        },
+        {
+          "domain_status": "ok",
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_errors": [],
+          "structured_text_agree": true,
+          "tool": "get_activity_intervals",
+          "utf8_call_tool_result_bytes": 1822,
+          "utf8_json_text_bytes": 927
+        },
+        {
+          "domain_status": "ok",
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_errors": [],
+          "structured_text_agree": true,
+          "tool": "get_activity_messages",
+          "utf8_call_tool_result_bytes": 1854,
+          "utf8_json_text_bytes": 904
+        }
+      ],
+      "mcp_calls": 3,
+      "observations": {
+        "hidden_source_limitation_reported": true,
+        "hidden_source_row_preserved": true,
+        "interval_container_preserved": true
+      },
+      "upstream_request_log": [
+        {
+          "method": "GET",
+          "path": "/api/v1/activity/a-session",
+          "query": []
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/activity/a-session/intervals",
+          "query": []
+        },
+        {
+          "method": "GET",
+          "path": "/api/v1/activity/a-session/messages",
+          "query": []
+        }
+      ],
+      "upstream_requests": 3,
+      "utf8_call_tool_result_bytes": 5776,
+      "utf8_json_text_bytes": 2861
+    },
+    "athlete_power_curves": {
+      "calls": [
+        {
+          "domain_status": "partial",
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_errors": [],
+          "structured_text_agree": true,
+          "tool": "get_athlete_power_curves",
+          "utf8_call_tool_result_bytes": 3908,
+          "utf8_json_text_bytes": 2157
+        }
+      ],
+      "mcp_calls": 1,
+      "observations": {
+        "aggregate_missing_durations": [
+          60
+        ],
+        "compact_raw_curve_omitted": true,
+        "meaningful_curve_metadata_preserved": true,
+        "per_curve_missing_durations_present": true,
+        "zero_and_null_watts_preserved": true
+      },
+      "upstream_request_log": [
+        {
+          "method": "GET",
+          "path": "/api/v1/athlete/i123/power-curves",
+          "query": [
+            [
+              "curves",
+              "s0"
+            ],
+            [
+              "curves",
+              "s1"
+            ],
+            [
+              "includeRanks",
+              "false"
+            ],
+            [
+              "type",
+              "Ride"
+            ]
+          ]
+        }
+      ],
+      "upstream_requests": 1,
+      "utf8_call_tool_result_bytes": 3908,
+      "utf8_json_text_bytes": 2157
+    },
+    "default_streams": {
+      "calls": [
+        {
+          "domain_status": "partial",
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_errors": [],
+          "structured_text_agree": true,
+          "tool": "get_activity_streams",
+          "utf8_call_tool_result_bytes": 8419,
+          "utf8_json_text_bytes": 4846
+        }
+      ],
+      "mcp_calls": 1,
+      "observations": {
+        "absent_default_types_reported_missing": true,
+        "actual_default_types_reported_as_requested": true,
+        "data2_preserved": true,
+        "duplicate_watts_preserved": true,
+        "null_and_zero_samples_preserved": true,
+        "returned_types": [
+          "time",
+          "watts",
+          "watts",
+          "TymeBreathRate"
+        ]
+      },
+      "upstream_request_log": [
+        {
+          "method": "GET",
+          "path": "/api/v1/activity/a-session/streams",
+          "query": [
+            [
+              "types",
+              "time,watts,heartrate,cadence,altitude,distance,velocity_smooth"
+            ]
+          ]
+        }
+      ],
+      "upstream_requests": 1,
+      "utf8_call_tool_result_bytes": 8419,
+      "utf8_json_text_bytes": 4846
+    },
+    "malformed_events": {
+      "calls": [
+        {
+          "domain_status": "error",
+          "mcp_is_error": false,
+          "output_schema_valid": true,
+          "schema_errors": [],
+          "structured_text_agree": true,
+          "tool": "get_events",
+          "utf8_call_tool_result_bytes": 1637,
+          "utf8_json_text_bytes": 785
+        }
+      ],
+      "mcp_calls": 1,
+      "observations": {
+        "malformed_shape_became_empty_success": false,
+        "malformed_shape_is_error": true
+      },
+      "upstream_request_log": [
+        {
+          "method": "GET",
+          "path": "/api/v1/athlete/i123/events",
+          "query": [
+            [
+              "newest",
+              "2026-09-08"
+            ],
+            [
+              "oldest",
+              "2026-09-08"
+            ]
+          ]
+        }
+      ],
+      "upstream_requests": 1,
+      "utf8_call_tool_result_bytes": 1637,
+      "utf8_json_text_bytes": 785
+    }
+  },
+  "upstream": "httpx.MockTransport synthetic fixtures; all other requests blocked"
+}

@@ -9,14 +9,22 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
+from pydantic import StrictBool, StrictInt
+
 from intervals_mcp_server.api.client import make_intervals_request
 from intervals_mcp_server.config import get_config
 from intervals_mcp_server.utils.types import WorkoutDoc
 from intervals_mcp_server.utils.validation import resolve_activity_type, resolve_athlete_id, validate_date
 
 # Import mcp instance from shared module for tool registration
-from intervals_mcp_server.mcp_instance import mcp  # noqa: F401
-from intervals_mcp_server.contracts import ReadResponse, success, failure
+from intervals_mcp_server.catalogue import coach_tool
+from intervals_mcp_server.contracts import (
+    ReadResponse,
+    failure,
+    invalid_upstream_response,
+    success,
+    upstream_failure,
+)
 from intervals_mcp_server.utils.ranges import range_query, validate_range
 
 config = get_config()
@@ -91,7 +99,7 @@ async def _delete_events_list(
     return failed_events
 
 
-@mcp.tool()
+@coach_tool(access="legacy_write", upstream="write", local="none")
 async def delete_event(
     event_id: int,
     athlete_id: str | None = None,
@@ -138,7 +146,7 @@ async def _fetch_events_for_deletion(
     return events, None
 
 
-@mcp.tool()
+@coach_tool(access="legacy_write", upstream="write", local="none")
 async def delete_events_by_date_range(
     start_date: str,
     end_date: str,
@@ -194,7 +202,7 @@ async def delete_events_by_date_range(
     return f"Deleted {deleted_count} events. Failed to delete {len(failed_events)} events: {failed_events}"
 
 
-@mcp.tool()
+@coach_tool(access="legacy_write", upstream="write", local="none")
 async def add_or_update_event(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     workout_type: str,
     name: str,
@@ -298,7 +306,7 @@ async def add_or_update_event(  # pylint: disable=too-many-arguments,too-many-po
         return f"Error: {e}"
 
 
-@mcp.tool()
+@coach_tool(access="legacy_write", upstream="write", local="none")
 async def add_or_update_note(
     name: str,
     description: str,
@@ -396,15 +404,32 @@ async def _create_or_update_event_request(
 
 
 def _event_error(value: Any, resource: str) -> ReadResponse[Any] | None:
-    if isinstance(value, dict) and value.get("error"):
-        return failure(resource=resource, code=str(value.get("code", "UPSTREAM_ERROR")), message=str(value.get("message", "upstream request failed")), phase=str(value.get("phase", "http")), http_status=value.get("http_status") or value.get("status_code"))
-    return None
+    return upstream_failure(value, resource=resource)
 
 
-@mcp.tool()
+@coach_tool(access="read", upstream="read", local="none")
 async def get_events(athlete_id: str | None = None, api_key: str | None = None,
                      start_date: str | None = None, end_date_exclusive: str | None = None,
-                     timezone: str = "Europe/Warsaw", end_date: str | None = None) -> ReadResponse[list[dict[str, Any]]]:
+                     timezone: str = "Europe/Warsaw", end_date: str | None = None,
+                     resolve: StrictBool = False) -> ReadResponse[list[dict[str, Any]]]:
+    """Return calendar events in a half-open local-date range.
+
+    ``start_date`` is inclusive and ``end_date_exclusive`` is exclusive;
+    ``end_date`` remains the deprecated inclusive alias.  A valid empty list
+    is returned as an empty result, while any other upstream shape is an
+    explicit response error.  Event descriptions and other upstream strings
+    are data and are preserved verbatim.  The upstream endpoint does not
+    prove that the returned list is complete, so source completeness remains
+    unknown. Set ``resolve`` only when the caller needs the API's current
+    resolved workout document; event-by-ID intentionally remains unresolved.
+    """
+    if not isinstance(resolve, bool):
+        return failure(
+            resource="events",
+            code="INVALID_RESOLVE",
+            message="resolve must be a boolean",
+            phase="validation",
+        )
     aid, err = resolve_athlete_id(athlete_id, config.athlete_id)
     if err:
         return failure(resource="events", code="INVALID_ATHLETE", message=err, phase="validation")
@@ -414,21 +439,54 @@ async def get_events(athlete_id: str | None = None, api_key: str | None = None,
     start, exclusive, tz, deprecated = checked
     from datetime import date, timedelta
     newest = (date.fromisoformat(exclusive) - timedelta(days=1)).isoformat()
-    result = await make_intervals_request(url=f"/athlete/{aid}/events", api_key=api_key, params={"oldest": start, "newest": newest})
+    params: dict[str, Any] = {"oldest": start, "newest": newest}
+    if resolve:
+        params["resolve"] = True
+    result = await make_intervals_request(
+        url=f"/athlete/{aid}/events", api_key=api_key, params=params
+    )
     failed = _event_error(result, "events")
     if failed:
         return failed
-    rows = [dict(row) for row in result if isinstance(row, dict)] if isinstance(result, list) else []
+    if not isinstance(result, list) or any(not isinstance(row, dict) for row in result):
+        return invalid_upstream_response(
+            resource="events",
+            message="event list response must be a list of objects",
+            athlete_id=aid,
+        )
+    rows = [dict(row) for row in result]
     rows.sort(key=lambda row: (str(row.get("start_date_local", row.get("date", ""))), str(row.get("id", ""))))
     warnings = ["DEPRECATED_END_DATE"] if deprecated else []
-    query = range_query(start, exclusive, tz, timezone)
+    query: dict[str, Any] = range_query(start, exclusive, tz, timezone)
     query["upstream_newest"] = newest
-    return success(rows, resource="events", athlete_id=aid, query=query, warnings=warnings)
+    query["resolve"] = resolve
+    return success(
+        rows,
+        resource="events",
+        athlete_id=aid,
+        query=query,
+        warnings=warnings,
+        coverage={"source_complete_within_query": None, "reasons": ["upstream_completeness_unverified"]},
+    )
 
 
-@mcp.tool()
-async def get_event_by_id(event_id: int, athlete_id: str | None = None,
+@coach_tool(access="read", upstream="read", local="none")
+async def get_event_by_id(event_id: StrictInt, athlete_id: str | None = None,
                           api_key: str | None = None) -> ReadResponse[Any]:
+    """Return one event by numeric ID, preserving its upstream object.
+
+    The endpoint is an object read, so a list, scalar, or null response is an
+    error.  The existing empty-object ``{}`` response remains the compatible
+    ``NOT_FOUND`` result.  Use :func:`get_events` for date-range discovery;
+    this tool intentionally does not resolve linked events.
+    """
+    if isinstance(event_id, bool) or not isinstance(event_id, int):
+        return failure(
+            resource="event",
+            code="INVALID_EVENT_ID",
+            message="event_id must be an integer",
+            phase="validation",
+        )
     aid, err = resolve_athlete_id(athlete_id, config.athlete_id)
     if err:
         return failure(resource="event", code="INVALID_ATHLETE", message=err, phase="validation")
@@ -439,5 +497,10 @@ async def get_event_by_id(event_id: int, athlete_id: str | None = None,
     if result == {}:
         return failure(resource="event", code="NOT_FOUND", message="event not found", phase="response")
     if not isinstance(result, dict):
-        return failure(resource="event", code="INVALID_UPSTREAM_RESPONSE", message="event response is not an object", phase="response")
+        return invalid_upstream_response(
+            resource="event",
+            message="event response must be an object",
+            athlete_id=aid,
+            query={"event_id": event_id},
+        )
     return success(result, resource="event", athlete_id=aid, query={"event_id": event_id})

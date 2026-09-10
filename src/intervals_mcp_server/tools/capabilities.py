@@ -3,19 +3,20 @@
 import os
 from intervals_mcp_server.config import get_config
 from intervals_mcp_server.contracts import ReadResponse, success
-from intervals_mcp_server.mcp_instance import mcp
+from intervals_mcp_server.catalogue import ToolCatalogue, coach_tool, default_catalogue
 
 
-@mcp.tool()
+@coach_tool(access="introspection", upstream="none", local="write")
 async def get_capabilities() -> ReadResponse[dict]:
     """Describe implemented/configured/live-verified integration capabilities."""
+    return capabilities_for(default_catalogue())
+
+
+def capabilities_for(catalogue: ToolCatalogue) -> ReadResponse[dict]:
+    """Describe the same immutable catalogue installed in the calling server."""
     config = get_config()
-    mode = os.getenv("INTERVALS_ACCESS_MODE", "admin").lower()
-    if mode not in {"admin", "coach", "readonly"}:
-        mode = "readonly"
-    safe = ["get_write_status"]
-    if mode != "readonly":
-        safe.insert(0, "apply_workout_changes")
+    mode = catalogue.mode
+    safe = catalogue.names("safe_write", "write_status")
     data = {
         "server": {
             "version": "0.1.0",
@@ -30,23 +31,31 @@ async def get_capabilities() -> ReadResponse[dict]:
         },
         "access": {"mode": "api_key", "configured": bool(config.api_key), "live_verified": False},
         "read_surface": {
-            "implemented": [
-                "get_activities",
-                "get_activity_details",
-                "get_activity_intervals",
-                "get_activity_streams",
-                "get_activity_messages",
-                "get_events",
-                "get_event_by_id",
-                "get_wellness_data",
-                "get_athlete_power_curves",
-            ],
+            "implemented": catalogue.names("read"),
             "configured": bool(config.api_key and config.athlete_id),
             "live_verified": False,
         },
-        "streams": {"preview": True, "range": True, "full": "export_only"},
+        "tool_catalogue": catalogue.describe(),
+        "streams": {
+            "preview": True,
+            "range": True,
+            "range_max_samples": 10_000,
+            "full": "export_only",
+        },
         "export": {
             "local_artifact_export": True,
+            "source": "intervals-mcp-server artifact store",
+            "description": (
+                "Temporary UTF-8 JSON assembled from separate Intervals.icu stream "
+                "and interval requests; its hash verifies local bytes, not an atomic "
+                "upstream snapshot."
+            ),
+            "client_access": {
+                "tool": "get_artifact_chunk",
+                "encoding": "base64",
+                "max_chunk_bytes": 32_768,
+            },
+            "source_complete_within_query": None,
             "configured": True,
             "artifact_dir": str(
                 __import__(
@@ -68,6 +77,7 @@ async def get_capabilities() -> ReadResponse[dict]:
             "mode": mode,
             "safe": safe,
             "legacy": mode == "admin",
+            "legacy_tools": catalogue.names("legacy_write"),
             "apply_workout_changes": {
                 "implemented": True,
                 "single_operation": False,
@@ -79,8 +89,24 @@ async def get_capabilities() -> ReadResponse[dict]:
                 "reconcile_reads_only": True,
                 "live_verified": False,
             },
+            "publish_analysis_comment": {
+                "implemented": True,
+                "same_version_replay": "durable local journal; retained records required",
+                "verification": "independent activity-message GET by acknowledged ID and exact content",
+                "upstream_idempotency": "unverified",
+                "lost_acknowledgement_id": "unknown; no automatic republish",
+                "live_verified": False,
+            },
+            "get_analysis_comment_status": {
+                "implemented": True,
+                "reconcile_reads_only": True,
+                "local_journal_may_change": True,
+                "live_verified": False,
+            },
             "operation_journal": True,
             "live_verified": False,
         },
     }
-    return success(data, resource="capabilities", athlete_id=config.athlete_id)
+    response = success(data, resource="capabilities", athlete_id=config.athlete_id)
+    response.source.system = "intervals-mcp-server"
+    return response

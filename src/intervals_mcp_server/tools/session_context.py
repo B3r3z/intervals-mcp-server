@@ -1,0 +1,1637 @@
+"""Compose bounded activity context from existing read-only tools."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import date, timedelta
+import json
+from typing import Any, Literal
+
+from intervals_mcp_server.contracts import (
+    Coverage,
+    ErrorInfo,
+    Query,
+    ReadResponse,
+    Source,
+    failure,
+)
+from intervals_mcp_server.catalogue import coach_tool
+from intervals_mcp_server.tools.activities import (
+    get_activity_details,
+    get_activity_intervals,
+    get_activity_messages,
+)
+from intervals_mcp_server.tools.events import get_event_by_id, get_events
+from intervals_mcp_server.tools.wellness import get_wellness_data
+
+SectionName = Literal["details", "intervals", "plan", "comments", "wellness"]
+DetailLevel = Literal["compact", "full"]
+
+_SECTION_ORDER: tuple[SectionName, ...] = (
+    "details",
+    "intervals",
+    "plan",
+    "comments",
+    "wellness",
+)
+_DEFAULT_SECTIONS: tuple[SectionName, ...] = ("details", "intervals", "comments")
+_COMPACT_TEXT_CHARS = 4_000
+_COMPACT_COMMENT_RECORDS = 20
+_COMPACT_INTERVAL_RECORDS = 100
+_COMPACT_WELLNESS_RECORDS = 10
+_COMPACT_WORKOUT_STEPS_BYTES = 32_768
+
+_DETAIL_FIELDS: tuple[str, ...] = (
+    "id",
+    "name",
+    "type",
+    "sub_type",
+    "startTime",
+    "start_date",
+    "start_date_local",
+    "timezone",
+    "source",
+    "description",
+    "moving_time",
+    "duration",
+    "elapsed_time",
+    "icu_recording_time",
+    "distance",
+    "icu_distance",
+    "total_elevation_gain",
+    "icu_average_watts",
+    "icu_weighted_avg_watts",
+    "average_heartrate",
+    "max_heartrate",
+    "average_cadence",
+    "icu_training_load",
+    "icu_training_load_data",
+    "power_load",
+    "hr_load",
+    "hr_load_type",
+    "pace_load",
+    "pace_load_type",
+    "strain_score",
+    "perceived_exertion",
+    "icu_rpe",
+    "feel",
+    "session_rpe",
+    "compliance",
+    "icu_intensity",
+    "decoupling",
+    "carbs_used",
+    "carbs_ingested",
+    "icu_ftp",
+    "lthr",
+    "threshold_pace",
+    "icu_power_zones",
+    "icu_zone_times",
+    "icu_hr_zones",
+    "icu_hr_zone_times",
+    "athlete_max_hr",
+    "pace_zones",
+    "paired_event_id",
+    "device_watts",
+    "has_heartrate",
+    "trainer",
+    "analysis_issues",
+    "tags",
+    "kg_lifted",
+    "_note",
+)
+_INTERVAL_FIELDS: tuple[str, ...] = (
+    "id",
+    "type",
+    "name",
+    "label",
+    "group_id",
+    "start_index",
+    "end_index",
+    "start_time",
+    "end_time",
+    "moving_time",
+    "elapsed_time",
+    "distance",
+    "average_watts",
+    "weighted_average_watts",
+    "average_watts_kg",
+    "average_heartrate",
+    "min_heartrate",
+    "max_heartrate",
+    "average_cadence",
+    "intensity",
+    "training_load",
+    "joules",
+    "joules_above_ftp",
+    "zone",
+    "zone_min_watts",
+    "zone_max_watts",
+    "wbal_start",
+    "wbal_end",
+    "decoupling",
+    "strain_score",
+    "average_speed",
+    "gap",
+    "total_elevation_gain",
+    "average_gradient",
+)
+_GROUP_FIELDS: tuple[str, ...] = _INTERVAL_FIELDS + ("count", "intervals")
+_COMMENT_FIELDS: tuple[str, ...] = (
+    "id",
+    "name",
+    "author",
+    "source",
+    "type",
+    "content",
+    "created",
+    "updated",
+    "content_fingerprint",
+    "athlete_id",
+    "activity_id",
+    "deleted",
+    "deleted_by_id",
+)
+_EVENT_FIELDS: tuple[str, ...] = (
+    "id",
+    "start_date_local",
+    "end_date_local",
+    "name",
+    "description",
+    "category",
+    "type",
+    "target",
+    "moving_time",
+    "distance",
+    "icu_training_load",
+    "icu_intensity",
+    "strain_score",
+    "icu_ftp",
+    "lthr",
+    "threshold_pace",
+    "w_prime",
+    "p_max",
+    "updated",
+    "plan_applied",
+)
+_WORKOUT_DOC_FIELDS: tuple[str, ...] = (
+    "description",
+    "duration",
+    "distance",
+    "ftp",
+    "lthr",
+    "threshold_pace",
+    "pace_units",
+    "category",
+    "target",
+)
+_WELLNESS_FIELDS: tuple[str, ...] = (
+    "id",
+    "date",
+    "ctl",
+    "atl",
+    "rampRate",
+    "ctlLoad",
+    "atlLoad",
+    "sportInfo",
+    "updated",
+    "weight",
+    "restingHR",
+    "hrv",
+    "hrvSDNN",
+    "menstrualPhase",
+    "menstrualPhasePredicted",
+    "kcalConsumed",
+    "sleepSecs",
+    "sleepScore",
+    "sleepQuality",
+    "avgSleepingHR",
+    "soreness",
+    "fatigue",
+    "stress",
+    "mood",
+    "motivation",
+    "injury",
+    "spO2",
+    "systolic",
+    "diastolic",
+    "hydration",
+    "hydrationVolume",
+    "readiness",
+    "baevskySI",
+    "bloodGlucose",
+    "lactate",
+    "bodyFat",
+    "abdomen",
+    "vo2max",
+    "comments",
+    "steps",
+    "respiration",
+    "carbohydrates",
+    "protein",
+    "fatTotal",
+    "locked",
+    "tempWeight",
+    "tempRestingHR",
+)
+
+
+def _model_dict(value: Any) -> dict[str, Any]:
+    return value.model_dump(mode="json", exclude_none=False)
+
+
+def _provenance(response: ReadResponse[Any], role: str) -> dict[str, Any]:
+    return {
+        "role": role,
+        "source": _model_dict(response.source),
+        "query": _model_dict(response.query),
+    }
+
+
+def _response_error(response: ReadResponse[Any]) -> dict[str, Any] | None:
+    return _model_dict(response.error) if response.error is not None else None
+
+
+def _response_section(
+    response: ReadResponse[Any],
+    *,
+    data: Any,
+    role: str,
+    dependencies: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    availability = {
+        "ok": "available",
+        "partial": "partial",
+        "error": "unavailable",
+    }[response.status]
+    return {
+        "status": response.status,
+        "availability": availability,
+        "data": data,
+        "provenance": [_provenance(response, role)],
+        "dependencies": dependencies or {},
+        "coverage": _model_dict(response.coverage),
+        "warnings": list(response.warnings),
+        "error": _response_error(response),
+    }
+
+
+def _composition_error(
+    *,
+    code: str,
+    message: str,
+    data: Any,
+    provenance: list[dict[str, Any]],
+    dependencies: dict[str, str],
+    status: Literal["partial", "error"],
+    recommended_action: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "availability": "partial" if status == "partial" else "unavailable",
+        "data": data,
+        "provenance": provenance,
+        "dependencies": dependencies,
+        "coverage": {
+            "source_complete_within_query": None,
+            "response_complete": False,
+            "truncated": False,
+            "reasons": [code],
+        },
+        "warnings": [code],
+        "error": {
+            "code": code,
+            "message": message,
+            "phase": "composition",
+            "http_status": None,
+            "recommended_action": recommended_action,
+        },
+    }
+
+
+def _local_failure(**kwargs: Any) -> ReadResponse[Any]:
+    """Return a context-domain failure without implying a fresh upstream read."""
+    response = failure(**kwargs)
+    response.source.system = "intervals-mcp-server"
+    return response
+
+
+def _dependent_error(
+    response: ReadResponse[Any], section_name: str
+) -> dict[str, Any]:
+    section = _response_section(
+        response,
+        data=[],
+        role="activity_dependency",
+        dependencies={"activity": "error"},
+    )
+    section["warnings"] = [f"{section_name.upper()}_ACTIVITY_DEPENDENCY_FAILED"]
+    return section
+
+
+def _copy_projected(
+    row: dict[str, Any],
+    fields: tuple[str, ...],
+    *,
+    path: str,
+    truncated_text: list[dict[str, Any]],
+) -> tuple[dict[str, Any], set[str]]:
+    projected: dict[str, Any] = {}
+    for field in fields:
+        if field not in row:
+            continue
+        value = deepcopy(row[field])
+        if isinstance(value, str) and len(value) > _COMPACT_TEXT_CHARS:
+            truncated_text.append(
+                {
+                    "path": f"{path}.{field}",
+                    "original_chars": len(value),
+                    "returned_chars": _COMPACT_TEXT_CHARS,
+                }
+            )
+            value = value[:_COMPACT_TEXT_CHARS]
+        projected[field] = value
+    return projected, set(row).difference(fields)
+
+
+def _threshold_values(
+    value: dict[str, Any], fields: dict[str, str]
+) -> dict[str, dict[str, Any]]:
+    return {
+        field: {"value": deepcopy(value[field]), "unit": unit}
+        for field, unit in fields.items()
+        if field in value
+    }
+
+
+def _activity_thresholds(activity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "activity_assigned": _threshold_values(
+            activity,
+            {
+                "icu_ftp": "W",
+                "lthr": "bpm",
+                "athlete_max_hr": "bpm",
+                "threshold_pace": "m/s",
+                "icu_hr_zones": "bpm",
+                "icu_hr_zone_times": "s",
+            },
+        ),
+        "scope": "historical_activity_assignment",
+        "current_sport_settings": {
+            "status": "not_requested",
+            "reason": "current settings are not substituted for activity-assigned values",
+        },
+    }
+
+
+def _activity_field_semantics(activity: dict[str, Any]) -> dict[str, Any]:
+    units = {
+        field: unit
+        for field, unit in {
+            "kg_lifted": "kg",
+            "moving_time": "s",
+            "duration": "s",
+            "elapsed_time": "s",
+            "icu_recording_time": "s",
+            "icu_hr_zones": "bpm",
+            "icu_hr_zone_times": "s",
+            "icu_zone_times": "s",
+            "lthr": "bpm",
+            "athlete_max_hr": "bpm",
+        }.items()
+        if field in activity
+    }
+    opaque = [
+        field
+        for field in ("hr_load_type", "pace_load_type", "icu_training_load_data")
+        if field in activity
+    ]
+    return {
+        "scope": "historical_activity",
+        "units": units,
+        "opaque_upstream_provenance_fields": opaque,
+        "interpretation": (
+            "Opaque load provenance values are preserved without model inference."
+        ),
+    }
+
+
+def _details_section(
+    response: ReadResponse[Any],
+    activity: dict[str, Any],
+    detail: DetailLevel,
+    activity_id: str,
+) -> dict[str, Any]:
+    if detail == "full":
+        section = _response_section(
+            response,
+            data=deepcopy(activity),
+            role="activity_details",
+            dependencies={"activity": response.status},
+        )
+    else:
+        truncated_text: list[dict[str, Any]] = []
+        data, omitted = _copy_projected(
+            activity,
+            _DETAIL_FIELDS,
+            path="details",
+            truncated_text=truncated_text,
+        )
+        full_parameters: dict[str, Any] = {"activity_id": activity_id}
+        if "icu_intervals" in activity or "icu_groups" in activity:
+            full_parameters["include_intervals"] = True
+        section = _response_section(
+            response,
+            data=data,
+            role="activity_details",
+            dependencies={"activity": response.status},
+        )
+        section["projection"] = {
+            "mode": "compact",
+            "text_limit_chars": _COMPACT_TEXT_CHARS,
+            "omitted_fields": sorted(omitted),
+            "truncated_text": truncated_text,
+            "full_follow_up": {
+                "tool": "get_activity_details",
+                "parameters": full_parameters,
+            },
+        }
+        truncated = bool(omitted or truncated_text)
+        section["coverage"]["response_complete"] = not truncated
+        section["coverage"]["truncated"] = truncated
+        if truncated:
+            section["coverage"]["reasons"] = list(
+                dict.fromkeys(section["coverage"]["reasons"] + ["compact_projection"])
+            )
+    section["thresholds"] = _activity_thresholds(activity)
+    section["field_semantics"] = _activity_field_semantics(activity)
+    return section
+
+
+def _project_record_list(
+    rows: list[dict[str, Any]],
+    fields: tuple[str, ...],
+    *,
+    limit: int,
+    path: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    truncated_text: list[dict[str, Any]] = []
+    omitted_fields: set[str] = set()
+    projected: list[dict[str, Any]] = []
+    for index, row in enumerate(rows[:limit]):
+        item, omitted = _copy_projected(
+            row,
+            fields,
+            path=f"{path}[{index}]",
+            truncated_text=truncated_text,
+        )
+        projected.append(item)
+        omitted_fields.update(omitted)
+    return projected, {
+        "returned_records": len(projected),
+        "omitted_records": max(0, len(rows) - limit),
+        "omitted_fields": sorted(omitted_fields),
+        "truncated_text": truncated_text,
+        "upstream_order_preserved": True,
+        "order_semantics": "unknown",
+    }
+
+
+def _interval_shape_error(value: Any) -> str | None:
+    if isinstance(value, list):
+        if any(not isinstance(row, dict) for row in value):
+            return "flat interval list members must be objects"
+        return None
+    if not isinstance(value, dict):
+        return "interval data must be an object or flat list"
+    if not {"icu_intervals", "icu_groups"}.intersection(value):
+        return "interval data must contain icu_intervals or icu_groups"
+    for key in ("icu_intervals", "icu_groups"):
+        if key == "icu_groups" and value.get(key) is None:
+            continue
+        if key in value and (
+            not isinstance(value[key], list)
+            or any(not isinstance(row, dict) for row in value[key])
+        ):
+            return f"interval field {key} must be an array of objects"
+    return None
+
+
+def _interval_projection(
+    value: Any, activity_id: str
+) -> tuple[Any, dict[str, Any]]:
+    if isinstance(value, list):
+        projected, metadata = _project_record_list(
+            value,
+            _INTERVAL_FIELDS,
+            limit=_COMPACT_INTERVAL_RECORDS,
+            path="intervals",
+        )
+        metadata.update(
+            {
+                "mode": "compact",
+                "record_limit": _COMPACT_INTERVAL_RECORDS,
+                "full_follow_up": {
+                    "tool": "get_activity_intervals",
+                    "parameters": {"activity_id": activity_id},
+                },
+            }
+        )
+        return projected, metadata
+
+    assert isinstance(value, dict)
+    compact: dict[str, Any] = {}
+    aggregate_omitted: set[str] = set(value).difference(
+        {"icu_intervals", "icu_groups"}
+    )
+    omitted_records: dict[str, int | None] = {}
+    returned_records: dict[str, int | None] = {}
+    truncated_text: list[dict[str, Any]] = []
+    for field, fields in (
+        ("icu_intervals", _INTERVAL_FIELDS),
+        ("icu_groups", _GROUP_FIELDS),
+    ):
+        if field not in value:
+            continue
+        rows = value[field]
+        if field == "icu_groups" and rows is None:
+            compact[field] = None
+            omitted_records[field] = None
+            returned_records[field] = None
+            continue
+        assert isinstance(rows, list)
+        projected, metadata = _project_record_list(
+            rows,
+            fields,
+            limit=_COMPACT_INTERVAL_RECORDS,
+            path=f"intervals.{field}",
+        )
+        compact[field] = projected
+        aggregate_omitted.update(metadata["omitted_fields"])
+        omitted_records[field] = metadata["omitted_records"]
+        returned_records[field] = metadata["returned_records"]
+        truncated_text.extend(metadata["truncated_text"])
+    return compact, {
+        "mode": "compact",
+        "record_limit_per_container": _COMPACT_INTERVAL_RECORDS,
+        "returned_records": returned_records,
+        "omitted_records": omitted_records,
+        "omitted_fields": sorted(aggregate_omitted),
+        "truncated_text": truncated_text,
+        "upstream_order_preserved": True,
+        "order_semantics": "unknown",
+        "full_follow_up": {
+            "tool": "get_activity_intervals",
+            "parameters": {"activity_id": activity_id},
+        },
+    }
+
+
+def _finalize_interval_section(
+    response: ReadResponse[Any],
+    value: Any,
+    *,
+    detail: DetailLevel,
+    activity_id: str,
+    role: str,
+    dependencies: dict[str, str],
+) -> dict[str, Any]:
+    missing = (
+        ["icu_intervals"]
+        if isinstance(value, dict) and "icu_intervals" not in value
+        else []
+    )
+    section = _response_section(
+        response,
+        data=deepcopy(value),
+        role=role,
+        dependencies=dependencies,
+    )
+    if detail == "compact":
+        section["data"], section["projection"] = _interval_projection(
+            value, activity_id
+        )
+        projection = section["projection"]
+        omitted_records = projection.get("omitted_records", 0)
+        records_omitted = (
+            any(omitted_records.values())
+            if isinstance(omitted_records, dict)
+            else bool(omitted_records)
+        )
+        truncated = bool(
+            records_omitted
+            or projection.get("omitted_fields")
+            or projection.get("truncated_text")
+        )
+        section["coverage"]["response_complete"] = not truncated and not missing
+        section["coverage"]["truncated"] = truncated
+        if truncated:
+            section["coverage"]["reasons"] = list(
+                dict.fromkeys(section["coverage"]["reasons"] + ["compact_projection"])
+            )
+    if missing:
+        section["status"] = "partial"
+        section["availability"] = "partial"
+        section["missing"] = missing
+        section["warnings"] = list(
+            dict.fromkeys(section["warnings"] + ["ICU_INTERVALS_MISSING"])
+        )
+        section["coverage"]["response_complete"] = False
+        section["coverage"]["reasons"] = list(
+            dict.fromkeys(section["coverage"]["reasons"] + ["icu_intervals_missing"])
+        )
+    return section
+
+
+async def _intervals_section(
+    activity_response: ReadResponse[Any],
+    activity: dict[str, Any],
+    *,
+    detail: DetailLevel,
+    activity_id: str,
+    api_key: str | None,
+) -> dict[str, Any]:
+    if "icu_intervals" in activity:
+        embedded = {
+            field: deepcopy(activity[field])
+            for field in ("icu_intervals", "icu_groups")
+            if field in activity
+        }
+        shape_error = _interval_shape_error(embedded)
+        if shape_error:
+            return _composition_error(
+                code="INVALID_UPSTREAM_RESPONSE",
+                message=shape_error,
+                data=[],
+                provenance=[_provenance(activity_response, "activity_with_intervals")],
+                dependencies={"activity_with_intervals": activity_response.status},
+                status="error",
+                recommended_action="retry get_activity_intervals after checking the source",
+            )
+        return _finalize_interval_section(
+            activity_response,
+            embedded,
+            detail=detail,
+            activity_id=activity_id,
+            role="activity_with_intervals",
+            dependencies={"activity_with_intervals": activity_response.status},
+        )
+
+    embedded_groups: list[dict[str, Any]] | None = None
+    if "icu_groups" in activity:
+        groups = activity["icu_groups"]
+        if groups is not None and (
+            not isinstance(groups, list)
+            or any(not isinstance(row, dict) for row in groups)
+        ):
+            return _composition_error(
+                code="INVALID_UPSTREAM_RESPONSE",
+                message="embedded interval field icu_groups must be an array of objects",
+                data=[],
+                provenance=[_provenance(activity_response, "activity_with_intervals")],
+                dependencies={"activity_with_intervals": activity_response.status},
+                status="error",
+            )
+        if groups is not None:
+            embedded_groups = deepcopy(groups)
+
+    dedicated = await get_activity_intervals(activity_id, api_key=api_key)
+    dependencies: dict[str, str] = {
+        "activity_with_intervals": activity_response.status,
+        "dedicated_intervals": dedicated.status,
+    }
+    if dedicated.status != "error":
+        shape_error = _interval_shape_error(dedicated.data)
+        if shape_error:
+            return _composition_error(
+                code="INVALID_UPSTREAM_RESPONSE",
+                message=shape_error,
+                data={"icu_groups": embedded_groups} if embedded_groups is not None else [],
+                provenance=[
+                    _provenance(activity_response, "activity_with_intervals"),
+                    _provenance(dedicated, "dedicated_intervals"),
+                ],
+                dependencies=dependencies,
+                status="partial" if embedded_groups is not None else "error",
+            )
+        return _finalize_interval_section(
+            dedicated,
+            dedicated.data,
+            detail=detail,
+            activity_id=activity_id,
+            role="dedicated_intervals",
+            dependencies=dependencies,
+        )
+
+    if embedded_groups is not None:
+        value = {"icu_groups": embedded_groups}
+        section = _finalize_interval_section(
+            activity_response,
+            value,
+            detail=detail,
+            activity_id=activity_id,
+            role="activity_with_intervals",
+            dependencies=dependencies,
+        )
+        section["provenance"].append(_provenance(dedicated, "dedicated_intervals"))
+        section["error"] = _response_error(dedicated)
+        section["warnings"] = list(
+            dict.fromkeys(section["warnings"] + ["DEDICATED_INTERVAL_READ_FAILED"])
+        )
+        return section
+    return _response_section(
+        dedicated,
+        data=[],
+        role="dedicated_intervals",
+        dependencies=dependencies,
+    )
+
+
+def _comments_section(
+    response: ReadResponse[Any], activity_id: str, detail: DetailLevel
+) -> dict[str, Any]:
+    if response.status == "error" or detail == "full":
+        return _response_section(
+            response,
+            data=deepcopy(response.data),
+            role="activity_messages",
+        )
+    assert isinstance(response.data, list)
+    compact, metadata = _project_record_list(
+        response.data,
+        _COMMENT_FIELDS,
+        limit=_COMPACT_COMMENT_RECORDS,
+        path="comments",
+    )
+    metadata.update(
+        {
+            "mode": "compact",
+            "record_limit": _COMPACT_COMMENT_RECORDS,
+            "text_limit_chars": _COMPACT_TEXT_CHARS,
+            "full_follow_up": {
+                "tool": "get_activity_messages",
+                "parameters": {"activity_id": activity_id},
+            },
+        }
+    )
+    section = _response_section(
+        response,
+        data=compact,
+        role="activity_messages",
+    )
+    section["projection"] = metadata
+    truncated = bool(
+        metadata["omitted_records"]
+        or metadata["omitted_fields"]
+        or metadata["truncated_text"]
+    )
+    section["coverage"]["response_complete"] = not truncated
+    section["coverage"]["truncated"] = truncated
+    if truncated:
+        section["coverage"]["reasons"] = list(
+            dict.fromkeys(section["coverage"]["reasons"] + ["compact_projection"])
+        )
+    return section
+
+
+def _activity_date(activity: dict[str, Any]) -> str | None:
+    value = activity.get("start_date_local")
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    try:
+        return date.fromisoformat(value[:10]).isoformat()
+    except ValueError:
+        return None
+
+
+def _paired_event_id(activity: dict[str, Any]) -> tuple[int | None, str | None]:
+    if "paired_event_id" not in activity:
+        return None, "PAIRED_EVENT_MISSING"
+    value = activity["paired_event_id"]
+    if value is None:
+        return None, "PAIRED_EVENT_NULL"
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None, "INVALID_PAIRED_EVENT_ID"
+    return value, None
+
+
+def _event_thresholds(event: dict[str, Any], activity: dict[str, Any]) -> dict[str, Any]:
+    workout_doc = event.get("workout_doc")
+    workout_thresholds: dict[str, Any] = {}
+    if isinstance(workout_doc, dict):
+        workout_thresholds = _threshold_values(
+            workout_doc,
+            {"ftp": "W", "lthr": "bpm", "threshold_pace": "m/s"},
+        )
+        if "pace_units" in workout_doc:
+            workout_thresholds["pace_units"] = {
+                "value": deepcopy(workout_doc["pace_units"]),
+                "unit": "display_unit_enum",
+            }
+    return {
+        "activity_assigned": _activity_thresholds(activity)["activity_assigned"],
+        "event_provided": _threshold_values(
+            event,
+            {
+                "icu_ftp": "W",
+                "lthr": "bpm",
+                "threshold_pace": "m/s",
+                "w_prime": "J",
+                "p_max": "W",
+            },
+        ),
+        "workout_document": workout_thresholds,
+        "current_sport_settings": {
+            "status": "not_requested",
+            "reason": "current settings are not substituted for stored plan values",
+        },
+    }
+
+
+def _compact_event(
+    event: dict[str, Any],
+    *,
+    path: str,
+) -> tuple[dict[str, Any], set[str], list[dict[str, Any]], dict[str, Any] | None, str | None]:
+    truncated_text: list[dict[str, Any]] = []
+    compact, omitted = _copy_projected(
+        event,
+        _EVENT_FIELDS,
+        path=path,
+        truncated_text=truncated_text,
+    )
+    steps_projection: dict[str, Any] | None = None
+    malformed: str | None = None
+    if "workout_doc" in event:
+        workout_doc = event["workout_doc"]
+        omitted.discard("workout_doc")
+        if workout_doc is None:
+            compact["workout_doc"] = None
+            steps_projection = {
+                "status": "unavailable",
+                "reason": "upstream_workout_doc_null",
+            }
+        elif not isinstance(workout_doc, dict):
+            malformed = "workout_doc must be an object when present"
+            steps_projection = {"status": "malformed", "reason": "invalid_workout_doc"}
+        else:
+            compact_doc, doc_omitted = _copy_projected(
+                workout_doc,
+                _WORKOUT_DOC_FIELDS,
+                path=f"{path}.workout_doc",
+                truncated_text=truncated_text,
+            )
+            omitted.update(f"workout_doc.{field}" for field in doc_omitted if field != "steps")
+            if "steps" in workout_doc:
+                steps = workout_doc["steps"]
+                if steps is None:
+                    compact_doc["steps"] = None
+                    steps_projection = {
+                        "status": "unavailable",
+                        "reason": "upstream_steps_null",
+                    }
+                elif not isinstance(steps, list):
+                    malformed = "workout_doc.steps must be an array when present"
+                    steps_projection = {
+                        "status": "malformed",
+                        "reason": "invalid_step_tree",
+                    }
+                else:
+                    try:
+                        step_bytes = len(
+                            json.dumps(
+                                steps,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        )
+                    except (TypeError, ValueError, UnicodeEncodeError):
+                        step_bytes = _COMPACT_WORKOUT_STEPS_BYTES + 1
+                        malformed = "workout_doc.steps could not be measured as JSON"
+                    if malformed is None and step_bytes <= _COMPACT_WORKOUT_STEPS_BYTES:
+                        compact_doc["steps"] = deepcopy(steps)
+                        steps_projection = {
+                            "status": "included_whole",
+                            "bytes": step_bytes,
+                            "limit_bytes": _COMPACT_WORKOUT_STEPS_BYTES,
+                        }
+                    elif malformed is None:
+                        steps_projection = {
+                            "status": "omitted",
+                            "reason": "compact_size_limit",
+                            "limit_bytes": _COMPACT_WORKOUT_STEPS_BYTES,
+                        }
+            compact["workout_doc"] = compact_doc
+    return compact, omitted, truncated_text, steps_projection, malformed
+
+
+def _workout_document_shape_error(event: dict[str, Any]) -> str | None:
+    if "workout_doc" not in event:
+        return None
+    workout_doc = event["workout_doc"]
+    if workout_doc is None:
+        return None
+    if not isinstance(workout_doc, dict):
+        return "workout_doc must be an object when present"
+    if "steps" not in workout_doc:
+        return None
+
+    def validate_steps(steps: Any, path: str) -> str | None:
+        if steps is None:
+            return None
+        if not isinstance(steps, list):
+            return f"{path} must be an array"
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                return f"{path}[{index}] must be an object"
+            for target in ("_power", "_hr", "_pace"):
+                if (
+                    target in step
+                    and step[target] is not None
+                    and not isinstance(step[target], dict)
+                ):
+                    return f"{path}[{index}].{target} must be a Value object"
+            if "steps" in step:
+                error = validate_steps(step["steps"], f"{path}[{index}].steps")
+                if error:
+                    return error
+        return None
+
+    return validate_steps(workout_doc["steps"], "workout_doc.steps")
+
+
+def _plan_full_follow_up(
+    activity_id: str, athlete_id: str | None
+) -> dict[str, Any]:
+    return {
+        "tool": "get_session_context",
+        "parameters": {
+            "activity_id": activity_id,
+            "sections": ["plan"],
+            "detail": "full",
+            "athlete_id": athlete_id,
+        },
+    }
+
+
+def _finalize_plan_outcome(
+    *,
+    activity: dict[str, Any],
+    activity_id: str,
+    athlete_id: str | None,
+    detail: DetailLevel,
+    paired_id: int,
+    raw_event: dict[str, Any],
+    resolved_event: dict[str, Any] | None,
+    response: ReadResponse[Any],
+    provenance: list[dict[str, Any]],
+    dependencies: dict[str, str],
+    composition_error: dict[str, Any] | None = None,
+    upstream_error: dict[str, Any] | None = None,
+    resolved_current_plan: bool = False,
+) -> dict[str, Any]:
+    threshold_event = resolved_event if resolved_event is not None else raw_event
+    data = {
+        "paired_event_id": paired_id,
+        "raw_event": deepcopy(raw_event),
+        "resolved_event": deepcopy(resolved_event),
+        "thresholds": _event_thresholds(threshold_event, activity),
+    }
+    if composition_error is None:
+        section = _response_section(
+            response,
+            data=data,
+            role="paired_event_resolved_day" if resolved_event is not None else "paired_event_raw",
+            dependencies=dependencies,
+        )
+        section["provenance"] = provenance
+    else:
+        section = _composition_error(
+            code=composition_error["code"],
+            message=composition_error["message"],
+            data=data,
+            provenance=provenance,
+            dependencies=dependencies,
+            status="partial",
+            recommended_action=composition_error.get("recommended_action"),
+        )
+    if upstream_error is not None:
+        section["upstream_error"] = deepcopy(upstream_error)
+    if resolved_current_plan:
+        section["warnings"] = list(
+            dict.fromkeys(section["warnings"] + ["PLAN_IS_CURRENT_STORED_VERSION"])
+        )
+
+    raw_shape_error = _workout_document_shape_error(raw_event)
+    resolved_shape_error = (
+        _workout_document_shape_error(resolved_event)
+        if resolved_event is not None
+        else None
+    )
+    workout_shape_error = resolved_shape_error or raw_shape_error
+    if workout_shape_error:
+        workout_error = {
+            "code": "WORKOUT_DOCUMENT_MALFORMED",
+            "message": workout_shape_error,
+            "phase": "composition",
+            "http_status": None,
+            "recommended_action": (
+                "use get_session_context detail=full to inspect the stored event"
+            ),
+        }
+        if section["error"] is None:
+            section["error"] = workout_error
+        else:
+            section["workout_document_error"] = workout_error
+        section["status"] = "partial"
+        section["availability"] = "partial"
+        section["warnings"] = list(
+            dict.fromkeys(section["warnings"] + ["WORKOUT_DOCUMENT_MALFORMED"])
+        )
+        section["coverage"]["response_complete"] = False
+        section["coverage"]["reasons"] = list(
+            dict.fromkeys(
+                section["coverage"]["reasons"] + ["workout_document_malformed"]
+            )
+        )
+
+    if detail == "full":
+        return section
+
+    raw_compact, raw_omitted, raw_text, raw_steps, raw_compact_error = _compact_event(
+        raw_event, path="plan.raw_event"
+    )
+    if resolved_event is None:
+        resolved_compact = None
+        resolved_omitted: set[str] = set()
+        resolved_text: list[dict[str, Any]] = []
+        resolved_steps = None
+        resolved_compact_error = None
+    else:
+        (
+            resolved_compact,
+            resolved_omitted,
+            resolved_text,
+            resolved_steps,
+            resolved_compact_error,
+        ) = _compact_event(resolved_event, path="plan.resolved_event")
+    section["data"] = {
+        "paired_event_id": paired_id,
+        "raw_event": raw_compact,
+        "resolved_event": resolved_compact,
+        "thresholds": _event_thresholds(threshold_event, activity),
+    }
+    section["projection"] = {
+        "mode": "compact",
+        "text_limit_chars": _COMPACT_TEXT_CHARS,
+        "workout_steps_limit_bytes": _COMPACT_WORKOUT_STEPS_BYTES,
+        "omitted_fields": sorted(raw_omitted | resolved_omitted),
+        "truncated_text": raw_text + resolved_text,
+        "full_follow_up": _plan_full_follow_up(activity_id, athlete_id),
+    }
+    steps_projection = resolved_steps or raw_steps
+    if steps_projection is not None:
+        section["projection"]["workout_steps"] = steps_projection
+    omitted_steps = bool(
+        steps_projection
+        and steps_projection.get("status") in {"omitted", "malformed"}
+    )
+    truncated = bool(
+        raw_omitted
+        or resolved_omitted
+        or raw_text
+        or resolved_text
+        or omitted_steps
+    )
+    section["coverage"]["response_complete"] = (
+        section["status"] == "ok" and not truncated
+    )
+    section["coverage"]["truncated"] = truncated
+    if truncated:
+        section["coverage"]["reasons"] = list(
+            dict.fromkeys(section["coverage"]["reasons"] + ["compact_projection"])
+        )
+    compact_error = resolved_compact_error or raw_compact_error
+    if compact_error and workout_shape_error is None:
+        section["status"] = "partial"
+        section["availability"] = "partial"
+        section["coverage"]["response_complete"] = False
+        section["warnings"] = list(
+            dict.fromkeys(section["warnings"] + ["WORKOUT_DOCUMENT_MALFORMED"])
+        )
+        section["error"] = {
+            "code": "WORKOUT_DOCUMENT_MALFORMED",
+            "message": compact_error,
+            "phase": "composition",
+            "http_status": None,
+            "recommended_action": (
+                "use get_session_context detail=full to inspect the stored event"
+            ),
+        }
+    return section
+
+
+async def _plan_section(
+    activity_response: ReadResponse[Any],
+    activity: dict[str, Any],
+    *,
+    detail: DetailLevel,
+    activity_id: str,
+    athlete_id: str | None,
+    timezone: str,
+    api_key: str | None,
+) -> dict[str, Any]:
+    paired_id, pair_error = _paired_event_id(activity)
+    activity_provenance = [_provenance(activity_response, "activity_pairing")]
+    if pair_error:
+        messages = {
+            "PAIRED_EVENT_MISSING": "activity has no paired_event_id field",
+            "PAIRED_EVENT_NULL": "activity paired_event_id is explicitly null",
+            "INVALID_PAIRED_EVENT_ID": "paired_event_id must be a positive integer",
+        }
+        link_data = (
+            {}
+            if "paired_event_id" not in activity
+            else {"paired_event_id": deepcopy(activity["paired_event_id"])}
+        )
+        return _composition_error(
+            code=pair_error,
+            message=messages[pair_error],
+            data=link_data,
+            provenance=activity_provenance,
+            dependencies={"activity": activity_response.status, "paired_event": "unavailable"},
+            status="error",
+            recommended_action="use get_event_by_id only after obtaining a valid numeric link",
+        )
+    assert paired_id is not None
+
+    raw_response = await get_event_by_id(
+        paired_id, athlete_id=athlete_id, api_key=api_key
+    )
+    provenance = activity_provenance + [_provenance(raw_response, "paired_event_raw")]
+    dependencies: dict[str, str] = {
+        "activity": activity_response.status,
+        "paired_event_raw": raw_response.status,
+    }
+    if raw_response.status == "error" or not isinstance(raw_response.data, dict):
+        section = _response_section(
+            raw_response,
+            data={"paired_event_id": paired_id, "raw_event": None, "resolved_event": None},
+            role="paired_event_raw",
+            dependencies=dependencies,
+        )
+        section["provenance"] = provenance
+        return section
+
+    raw_event = deepcopy(raw_response.data)
+    raw_id = raw_event.get("id")
+    if "id" not in raw_event:
+        identity_error = {
+            "code": "PAIRED_EVENT_ID_MISSING",
+            "message": "paired event response has no id",
+            "recommended_action": "inspect the raw event with get_event_by_id",
+        }
+    elif isinstance(raw_id, bool) or not isinstance(raw_id, int) or raw_id < 1:
+        identity_error = {
+            "code": "PAIRED_EVENT_ID_INVALID",
+            "message": "paired event response id must be a positive integer",
+            "recommended_action": "inspect the raw event with get_event_by_id",
+        }
+    elif raw_id != paired_id:
+        identity_error = {
+            "code": "PAIRED_EVENT_ID_MISMATCH",
+            "message": "paired event response id does not match paired_event_id",
+            "recommended_action": "inspect the raw event with get_event_by_id",
+        }
+    else:
+        identity_error = None
+    if identity_error is not None:
+        dependencies["paired_event_identity"] = "error"
+        return _finalize_plan_outcome(
+            activity=activity,
+            activity_id=activity_id,
+            athlete_id=athlete_id,
+            detail=detail,
+            paired_id=paired_id,
+            raw_event=raw_event,
+            resolved_event=None,
+            response=raw_response,
+            provenance=provenance,
+            dependencies=dependencies,
+            composition_error=identity_error,
+        )
+    dependencies["paired_event_identity"] = "ok"
+    event_day = _activity_date(raw_event)
+    if event_day is None:
+        dependencies["paired_event_date"] = "error"
+        return _finalize_plan_outcome(
+            activity=activity,
+            activity_id=activity_id,
+            athlete_id=athlete_id,
+            detail=detail,
+            paired_id=paired_id,
+            raw_event=raw_event,
+            resolved_event=None,
+            response=raw_response,
+            provenance=provenance,
+            dependencies=dependencies,
+            composition_error={
+                "code": "PAIRED_EVENT_DATE_INVALID",
+                "message": "paired event has no valid start_date_local date",
+                "recommended_action": "inspect the raw event with get_event_by_id",
+            },
+        )
+
+    next_day = (date.fromisoformat(event_day) + timedelta(days=1)).isoformat()
+    resolved_response = await get_events(
+        athlete_id=athlete_id,
+        api_key=api_key,
+        start_date=event_day,
+        end_date_exclusive=next_day,
+        timezone=timezone,
+        resolve=True,
+    )
+    provenance.append(_provenance(resolved_response, "paired_event_resolved_day"))
+    dependencies["paired_event_date"] = "ok"
+    dependencies["resolved_event_day"] = resolved_response.status
+    if resolved_response.status == "error" or not isinstance(resolved_response.data, list):
+        return _finalize_plan_outcome(
+            activity=activity,
+            activity_id=activity_id,
+            athlete_id=athlete_id,
+            detail=detail,
+            paired_id=paired_id,
+            raw_event=raw_event,
+            resolved_event=None,
+            response=raw_response,
+            provenance=provenance,
+            dependencies=dependencies,
+            composition_error={
+                "code": "PAIRED_EVENT_RESOLVE_FAILED",
+                "message": "paired event resolve read failed; raw event is retained",
+                "recommended_action": "retry the same-day get_events read with resolve=true",
+            },
+            upstream_error=_response_error(resolved_response),
+        )
+
+    matches = [
+        row
+        for row in resolved_response.data
+        if isinstance(row.get("id"), int)
+        and not isinstance(row.get("id"), bool)
+        and row["id"] == paired_id
+    ]
+    if len(matches) != 1:
+        code = "AMBIGUOUS_PAIRED_EVENT" if len(matches) > 1 else "PAIRED_EVENT_NOT_RESOLVED"
+        message = (
+            "resolved event list contains multiple rows with the paired event id"
+            if len(matches) > 1
+            else "resolved event list contains no row with the paired event id"
+        )
+        return _finalize_plan_outcome(
+            activity=activity,
+            activity_id=activity_id,
+            athlete_id=athlete_id,
+            detail=detail,
+            paired_id=paired_id,
+            raw_event=raw_event,
+            resolved_event=None,
+            response=resolved_response,
+            provenance=provenance,
+            dependencies=dependencies,
+            composition_error={
+                "code": code,
+                "message": message,
+                "recommended_action": "inspect the raw event and same-day resolved event list",
+            },
+        )
+
+    resolved_event = deepcopy(matches[0])
+    return _finalize_plan_outcome(
+        activity=activity,
+        activity_id=activity_id,
+        athlete_id=athlete_id,
+        detail=detail,
+        paired_id=paired_id,
+        raw_event=raw_event,
+        resolved_event=resolved_event,
+        response=resolved_response,
+        provenance=provenance,
+        dependencies=dependencies,
+        resolved_current_plan=True,
+    )
+
+
+def _wellness_section(
+    response: ReadResponse[Any],
+    *,
+    detail: DetailLevel,
+    activity_id: str,
+    activity_day: str,
+    athlete_id: str | None,
+) -> dict[str, Any]:
+    dependencies: dict[str, str] = {
+        "activity_date": "ok",
+        "wellness": response.status,
+    }
+    if response.status == "error" or detail == "full":
+        return _response_section(
+            response,
+            data=deepcopy(response.data),
+            role="activity_day_wellness",
+            dependencies=dependencies,
+        )
+    assert isinstance(response.data, list)
+    compact, metadata = _project_record_list(
+        response.data,
+        _WELLNESS_FIELDS,
+        limit=_COMPACT_WELLNESS_RECORDS,
+        path="wellness",
+    )
+    metadata.update(
+        {
+            "mode": "compact",
+            "record_limit": _COMPACT_WELLNESS_RECORDS,
+            "text_limit_chars": _COMPACT_TEXT_CHARS,
+            "full_follow_up": {
+                "tool": "get_wellness_data",
+                "parameters": {
+                    "athlete_id": athlete_id,
+                    "start_date": activity_day,
+                    "end_date_exclusive": (
+                        date.fromisoformat(activity_day) + timedelta(days=1)
+                    ).isoformat(),
+                },
+            },
+        }
+    )
+    section = _response_section(
+        response,
+        data=compact,
+        role="activity_day_wellness",
+        dependencies=dependencies,
+    )
+    section["projection"] = metadata
+    truncated = bool(
+        metadata["omitted_records"]
+        or metadata["omitted_fields"]
+        or metadata["truncated_text"]
+    )
+    section["coverage"]["response_complete"] = not truncated
+    section["coverage"]["truncated"] = truncated
+    if truncated:
+        section["coverage"]["reasons"] = list(
+            dict.fromkeys(section["coverage"]["reasons"] + ["compact_projection"])
+        )
+    return section
+
+
+def _aggregate_response(
+    *,
+    activity_id: str,
+    requested: list[SectionName],
+    detail: DetailLevel,
+    athlete_id: str | None,
+    timezone: str,
+    sections: dict[str, dict[str, Any]],
+) -> ReadResponse[Any]:
+    statuses = [section["status"] for section in sections.values()]
+    usable = [status for status in statuses if status in {"ok", "partial"}]
+    if not usable:
+        status: Literal["ok", "partial", "error"] = "error"
+    elif all(section_status == "ok" for section_status in statuses):
+        status = "ok"
+    else:
+        status = "partial"
+    truncated = any(
+        bool(section.get("coverage", {}).get("truncated"))
+        for section in sections.values()
+    )
+    complete = status == "ok" and not truncated and all(
+        bool(section.get("coverage", {}).get("response_complete"))
+        for section in sections.values()
+    )
+    reasons = ["upstream_completeness_unverified"]
+    if truncated:
+        reasons.append("compact_projection")
+    if status != "ok":
+        reasons.append("section_failures_or_partial_results")
+    warnings = [
+        f"SECTION_{name.upper()}_{section['status'].upper()}"
+        for name, section in sections.items()
+        if section["status"] != "ok"
+    ]
+    return ReadResponse(
+        status=status,
+        source=Source(
+            system="intervals-mcp-server",
+            resource="session_context",
+            athlete_id=athlete_id,
+        ),
+        query=Query.model_validate(
+            {
+                "activity_id": activity_id,
+                "sections": requested,
+                "detail": detail,
+                "timezone": timezone,
+            }
+        ),
+        data={
+            "activity_id": activity_id,
+            "detail": detail,
+            "requested_sections": requested,
+            "sections": sections,
+        },
+        coverage=Coverage(
+            source_complete_within_query=None,
+            response_complete=complete,
+            truncated=truncated,
+            reasons=reasons,
+        ),
+        warnings=warnings,
+        error=(
+            ErrorInfo(
+                code="SESSION_CONTEXT_UNAVAILABLE",
+                message="all requested session context sections are unavailable",
+                phase="composition",
+                recommended_action="use the section error details and retry the relevant raw read tool",
+            )
+            if status == "error"
+            else None
+        ),
+    )
+
+
+@coach_tool(access="read", upstream="read", local="none")
+async def get_session_context(
+    activity_id: str,
+    sections: list[SectionName] | None = None,
+    detail: DetailLevel = "compact",
+    athlete_id: str | None = None,
+    timezone: str = "Europe/Warsaw",
+    api_key: str | None = None,
+) -> ReadResponse[Any]:
+    """Return bounded, section-aware context for one completed activity.
+
+    The default sections are details, intervals, and comments. Only requested
+    sections are fetched; comments can be read without an athlete ID or an
+    activity-detail request. ``compact`` uses fixed limits (20 comments, 100
+    intervals and groups, 10 wellness rows, 4,000 characters per projected text
+    field, and 32,768 UTF-8 bytes for the complete workout step tree) and reports
+    every omission with an exact full-read continuation. It never prunes a
+    workout step tree or a resolved ``_power``, ``_hr``, or ``_pace`` value.
+
+    Plan resolution follows only a positive numeric ``paired_event_id``: the
+    raw event is fetched first, its own local date selects one resolved day, and
+    exactly one matching numeric ID is accepted. A failed resolve retains the
+    raw event. The resolved plan is the current stored version, not necessarily
+    the historical version executed by the activity. Activity-assigned
+    thresholds, stored event/workout thresholds, and current sport settings are
+    separate sources; this tool does not fetch or substitute current settings.
+    Each requested section reports its own status, availability, provenance,
+    dependencies, coverage, warnings, and error. A valid empty section remains
+    a successful fact, and successful sections survive failures elsewhere.
+    """
+    if not isinstance(activity_id, str) or not activity_id.strip():
+        return _local_failure(
+            resource="session_context",
+            code="INVALID_ACTIVITY_ID",
+            message="activity_id must be a non-empty string",
+            phase="validation",
+        )
+    if detail not in {"compact", "full"}:
+        return _local_failure(
+            resource="session_context",
+            code="INVALID_DETAIL",
+            message="detail must be compact or full",
+            phase="validation",
+            query={"activity_id": activity_id},
+        )
+    requested_raw: list[Any] = list(_DEFAULT_SECTIONS if sections is None else sections)
+    if not requested_raw:
+        return _local_failure(
+            resource="session_context",
+            code="INVALID_SECTIONS",
+            message="sections must contain at least one supported section",
+            phase="validation",
+            query={"activity_id": activity_id},
+        )
+    allowed = set(_SECTION_ORDER)
+    if (
+        any(not isinstance(section, str) or section not in allowed for section in requested_raw)
+        or len({section for section in requested_raw if isinstance(section, str)})
+        != len(requested_raw)
+    ):
+        return _local_failure(
+            resource="session_context",
+            code="INVALID_SECTIONS",
+            message="sections must be unique supported section names",
+            phase="validation",
+            query={"activity_id": activity_id},
+        )
+    requested = [section for section in _SECTION_ORDER if section in requested_raw]
+
+    activity_sections = {"details", "intervals", "plan", "wellness"}
+    needs_activity = any(section in activity_sections for section in requested)
+    activity_response: ReadResponse[Any] | None = None
+    activity: dict[str, Any] | None = None
+    if needs_activity:
+        activity_response = await get_activity_details(
+            activity_id,
+            api_key=api_key,
+            include_intervals="intervals" in requested,
+        )
+        if activity_response.status != "error" and isinstance(activity_response.data, dict):
+            activity = activity_response.data
+
+    composed: dict[str, dict[str, Any]] = {}
+    if "details" in requested:
+        assert activity_response is not None
+        composed["details"] = (
+            _dependent_error(activity_response, "details")
+            if activity is None
+            else _details_section(activity_response, activity, detail, activity_id)
+        )
+
+    if "intervals" in requested:
+        assert activity_response is not None
+        composed["intervals"] = (
+            _dependent_error(activity_response, "intervals")
+            if activity is None
+            else await _intervals_section(
+                activity_response,
+                activity,
+                detail=detail,
+                activity_id=activity_id,
+                api_key=api_key,
+            )
+        )
+
+    if "plan" in requested:
+        assert activity_response is not None
+        composed["plan"] = (
+            _dependent_error(activity_response, "plan")
+            if activity is None
+            else await _plan_section(
+                activity_response,
+                activity,
+                detail=detail,
+                activity_id=activity_id,
+                athlete_id=athlete_id,
+                timezone=timezone,
+                api_key=api_key,
+            )
+        )
+
+    if "comments" in requested:
+        comments_response = await get_activity_messages(activity_id, api_key=api_key)
+        composed["comments"] = _comments_section(
+            comments_response, activity_id, detail
+        )
+
+    if "wellness" in requested:
+        assert activity_response is not None
+        if activity is None:
+            composed["wellness"] = _dependent_error(activity_response, "wellness")
+        else:
+            activity_day = _activity_date(activity)
+            if activity_day is None:
+                composed["wellness"] = _composition_error(
+                    code="ACTIVITY_DATE_INVALID",
+                    message="activity has no valid start_date_local date for wellness",
+                    data=[],
+                    provenance=[_provenance(activity_response, "activity_date")],
+                    dependencies={"activity": activity_response.status, "activity_date": "error"},
+                    status="error",
+                    recommended_action="inspect activity details and request wellness by an explicit date",
+                )
+            else:
+                wellness_response = await get_wellness_data(
+                    athlete_id=athlete_id,
+                    api_key=api_key,
+                    start_date=activity_day,
+                    end_date_exclusive=(
+                        date.fromisoformat(activity_day) + timedelta(days=1)
+                    ).isoformat(),
+                    timezone=timezone,
+                )
+                composed["wellness"] = _wellness_section(
+                    wellness_response,
+                    detail=detail,
+                    activity_id=activity_id,
+                    activity_day=activity_day,
+                    athlete_id=athlete_id,
+                )
+
+    return _aggregate_response(
+        activity_id=activity_id,
+        requested=requested,
+        detail=detail,
+        athlete_id=athlete_id,
+        timezone=timezone,
+        sections=composed,
+    )
+
+
+__all__ = ["get_session_context"]

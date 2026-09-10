@@ -1,14 +1,17 @@
 """
 MCP tools registry for Intervals.icu MCP Server.
 
-This module registers all available MCP tools with the FastMCP server instance.
+Handlers are re-exported here. The catalogue installs tools explicitly at startup.
 """
 
-from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error
+from intervals_mcp_server.catalogue import register_tools, tool_catalogue
 
 # Import all tools for re-export
-# Note: Tools register themselves via @mcp.tool() decorators when imported
+# Importing declarations does not install tools in a FastMCP instance.
 from intervals_mcp_server.tools.activities import (  # noqa: F401
+    add_activity_message,
+    get_activity_messages,
+    export_activity_data,
     get_activities,
     get_activity_details,
     get_activity_intervals,
@@ -16,6 +19,7 @@ from intervals_mcp_server.tools.activities import (  # noqa: F401
 )
 from intervals_mcp_server.tools.events import (  # noqa: F401
     add_or_update_event,
+    add_or_update_note,
     delete_event,
     delete_events_by_date_range,
     get_event_by_id,
@@ -29,46 +33,24 @@ from intervals_mcp_server.tools.custom_items import (  # noqa: F401
     update_custom_item,
 )
 from intervals_mcp_server.tools.power_curves import (  # noqa: F401
+    get_activity_power_curves,
     get_athlete_power_curves,
+)
+from intervals_mcp_server.tools.settings import get_sport_settings  # noqa: F401
+from intervals_mcp_server.tools.metrics import get_metric_definitions  # noqa: F401
+from intervals_mcp_server.tools.artifacts import get_artifact_chunk  # noqa: F401
+from intervals_mcp_server.tools.session_context import get_session_context  # noqa: F401
+from intervals_mcp_server.tools.analytics import (  # noqa: F401
+    get_activity_best_efforts,
+    get_activity_interval_stats,
+)
+from intervals_mcp_server.tools.capabilities import get_capabilities  # noqa: F401
+from intervals_mcp_server.tools.analysis_comments import (  # noqa: F401
+    publish_analysis_comment,
+    get_analysis_comment_status,
 )
 from intervals_mcp_server.tools.wellness import get_wellness_data  # noqa: F401
 from intervals_mcp_server.tools.writes import apply_workout_changes, get_write_status  # noqa: F401
 
 
-def register_tools(mcp_instance: FastMCP) -> None:
-    """
-    Register all MCP tools with the FastMCP server instance.
-
-    This function imports all tool modules, which causes their @mcp.tool()
-    decorators to register the tools. The tools need access to the mcp instance,
-    so they will be imported after the mcp instance is created.
-
-    Args:
-        mcp_instance (FastMCP): The FastMCP server instance to register tools with.
-    """
-    # Tools are registered via decorators when modules are imported above
-    # The mcp_instance parameter is kept for future use if needed
-    _ = mcp_instance
-
-
-__all__ = [
-    "register_tools",
-    "get_activities",
-    "get_activity_details",
-    "get_activity_intervals",
-    "get_activity_streams",
-    "get_events",
-    "get_event_by_id",
-    "delete_event",
-    "delete_events_by_date_range",
-    "add_or_update_event",
-    "get_custom_items",
-    "get_custom_item_by_id",
-    "create_custom_item",
-    "update_custom_item",
-    "delete_custom_item",
-    "get_athlete_power_curves",
-    "get_wellness_data",
-    "apply_workout_changes",
-    "get_write_status",
-]
+__all__ = ["register_tools", *tool_catalogue("admin").names()]

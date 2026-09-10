@@ -8,7 +8,6 @@ including request management, error handling, and client lifecycle.
 from json import JSONDecodeError
 import json
 import logging
-import sys
 import asyncio
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -21,65 +20,32 @@ from intervals_mcp_server.config import get_config
 
 logger = logging.getLogger("intervals_icu_mcp_server")
 
-# Create a single AsyncClient instance for all requests (lazily initialized)
-# This can be monkeypatched via server.httpx_client for testing
-httpx_client: httpx.AsyncClient | None = None  # pylint: disable=invalid-name
+# One process-owned client. Tests can supply a MockTransport client at lifespan entry.
+httpx_client: httpx.AsyncClient | None = None
 
 
 async def _get_httpx_client() -> httpx.AsyncClient:
-    """
-    Lazily create or reuse the shared httpx AsyncClient.
-
-    The client may be closed by downstream transports between tool invocations,
-    so we recreate it when necessary.
-
-    This function checks server.httpx_client first (if available) to support
-    test monkeypatching via server.httpx_client.
-    """
-    global httpx_client  # pylint: disable=global-statement  # noqa: PLW0603 - we intentionally manage the shared client here
-
-    # Check for monkeypatched client in server module first (for test compatibility)
-    # This allows tests to monkeypatch server.httpx_client and have it work
-    try:
-        server_module = sys.modules.get("intervals_mcp_server.server")
-        if server_module and hasattr(server_module, "httpx_client"):
-            server_client = server_module.httpx_client
-            if server_client is not None and not server_client.is_closed:
-                return server_client
-    except (AttributeError, ImportError):
-        pass
-
-    # Use this module's httpx_client
+    """Lazily create or reuse the client owned by this module."""
+    global httpx_client
     if httpx_client is None or httpx_client.is_closed:
         httpx_client = httpx.AsyncClient()
     return httpx_client
 
 
 @asynccontextmanager
-async def setup_api_client(_app: FastMCP):
-    """
-    Context manager to ensure the shared httpx client is closed when the server stops.
-
-    Args:
-        _app (FastMCP): The MCP server application instance.
-    """
+async def setup_api_client(_app: FastMCP, *, client: httpx.AsyncClient | None = None):
+    """Own the request client's lifespan, including an optional test adapter."""
+    global httpx_client
+    if client is not None:
+        if httpx_client is not None and not httpx_client.is_closed and httpx_client is not client:
+            raise RuntimeError("HTTP client already configured")
+        httpx_client = client
     try:
         yield
     finally:
-        # Close the module-level httpx_client
-        if httpx_client and not httpx_client.is_closed:
-            await httpx_client.aclose()
-
-        # Also close server.httpx_client if it exists (for test compatibility)
-        # This ensures monkeypatched clients in tests are properly closed
-        try:
-            server_module = sys.modules.get("intervals_mcp_server.server")
-            if server_module and hasattr(server_module, "httpx_client"):
-                server_client = getattr(server_module, "httpx_client", None)
-                if server_client is not None and not server_client.is_closed:
-                    await server_client.aclose()
-        except (AttributeError, ImportError):
-            pass
+        owned_client, httpx_client = httpx_client, None
+        if owned_client is not None and not owned_client.is_closed:
+            await owned_client.aclose()
 
 
 def _get_error_message(error_code: int, error_text: str) -> str:

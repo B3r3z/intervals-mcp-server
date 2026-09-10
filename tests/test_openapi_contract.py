@@ -11,10 +11,11 @@ import re
 from typing import Any
 
 import httpx
+import pytest
 
 from intervals_mcp_server.api import client as api_client
 from intervals_mcp_server.config import Config
-from intervals_mcp_server.tools import activities, custom_items, events, power_curves, wellness
+from intervals_mcp_server.tools import analytics, activities, custom_items, events, power_curves, settings, wellness
 from scripts import check_openapi_contract as checker
 
 
@@ -35,7 +36,16 @@ def _normalize_runtime_path(method: str, url: str) -> str:
     """Map one concrete MCP request path to its original OpenAPI template."""
     path = url if url.startswith("/api/v1/") else f"/api/v1{url}"
     path = re.sub(r"^/api/v1/activity/[^/]+", "/api/v1/activity/{id}", path)
+    path = re.sub(
+        r"^/api/v1/athlete/[^/]+/sport-settings/[^/]+$",
+        "/api/v1/athlete/{athleteId}/sport-settings/{id}",
+        path,
+    )
     path = re.sub(r"^/api/v1/athlete/[^/]+", "/api/v1/athlete/{id}", path)
+    path = path.replace(
+        "/api/v1/athlete/{id}/sport-settings/{id}",
+        "/api/v1/athlete/{athleteId}/sport-settings/{id}",
+    )
     path = re.sub(r"/events/[^/]+$", "/events/{eventId}", path)
     path = re.sub(r"/custom-item/[^/]+$", "/custom-item/{itemId}", path)
 
@@ -46,6 +56,7 @@ def _normalize_runtime_path(method: str, url: str) -> str:
     if method == "GET" and path in {
         "/api/v1/athlete/{id}/power-curves",
         "/api/v1/athlete/{id}/wellness",
+        "/api/v1/activity/{id}/power-curves",
     }:
         return path + "{ext}"
     return path
@@ -87,12 +98,25 @@ class RequestRecorder:
             }
         if key == ("GET", "/api/v1/activity/{id}/intervals"):
             return {"id": ACTIVITY_ID, "icu_intervals": []}
+        if key == ("GET", "/api/v1/activity/{id}/interval-stats"):
+            return {"start_index": 0, "end_index": 10, "average_watts": 200}
+        if key == ("GET", "/api/v1/activity/{id}/best-efforts"):
+            return {"efforts": []}
         if key == ("GET", "/api/v1/activity/{id}/messages"):
-            return [{"id": "message-1", "content": "Existing contract message"}]
+            return [{"id": 1, "content": "Existing contract message"}]
         if key == ("POST", "/api/v1/activity/{id}/messages"):
-            return {"id": "message-2", **(data or {})}
+            return {"id": 2}
         if key == ("GET", "/api/v1/activity/{id}/streams{ext}"):
             return [{"type": "time", "data": [0, 1]}]
+        if key == ("GET", "/api/v1/activity/{id}/power-curves{ext}"):
+            return [
+                {
+                    "stream_type": "watts",
+                    "fatigue": "normal",
+                    "secs": [5],
+                    "values": [250],
+                }
+            ]
         if key == ("GET", "/api/v1/athlete/{id}/activities"):
             return []
         if key == ("GET", "/api/v1/athlete/{id}/events{format}"):
@@ -116,6 +140,8 @@ class RequestRecorder:
             return []
         if key == ("GET", "/api/v1/athlete/{id}/power-curves{ext}"):
             return {"list": []}
+        if key == ("GET", "/api/v1/athlete/{athleteId}/sport-settings/{id}"):
+            return {"types": ["Ride"], "ftp": 250}
         if key == ("GET", "/api/v1/athlete/{id}/custom-item"):
             return []
         if key in {
@@ -131,9 +157,13 @@ class RequestRecorder:
 
 
 async def _exercise_used_surface() -> None:
-    common = {"api_key": "contract-key"}
+    common: dict[str, Any] = {"api_key": "contract-key"}
     await activities.get_activity_details(ACTIVITY_ID, **common)
     await activities.get_activity_intervals(ACTIVITY_ID, **common)
+    await analytics.get_activity_interval_stats(ACTIVITY_ID, 0, 10, **common)
+    await analytics.get_activity_best_efforts(
+        ACTIVITY_ID, "watts", duration=60, **common
+    )
     await activities.get_activity_messages(ACTIVITY_ID, **common)
     await activities.add_activity_message(ACTIVITY_ID, "Contract message", **common)
     await activities.get_activity_streams(ACTIVITY_ID, **common)
@@ -183,6 +213,10 @@ async def _exercise_used_surface() -> None:
         last_season=False,
         **common,
     )
+    await power_curves.get_activity_power_curves(
+        ACTIVITY_ID, durations=[5], fatigue=["normal"], **common
+    )
+    await settings.get_sport_settings("Ride", athlete_id=ATHLETE_ID, **common)
     await custom_items.get_custom_items(athlete_id=ATHLETE_ID, **common)
     await custom_items.create_custom_item(
         "Contract item",
@@ -225,7 +259,7 @@ def _parameter_exceptions(fixture: dict[str, Any]) -> dict[tuple[str, str], set[
 def test_runtime_calls_match_pinned_used_surface(monkeypatch: Any) -> None:
     fixture = _load_fixture()
     recorder = RequestRecorder()
-    for module in (activities, custom_items, events, power_curves, wellness):
+    for module in (analytics, activities, custom_items, events, power_curves, settings, wellness):
         monkeypatch.setattr(module, "make_intervals_request", recorder)
     monkeypatch.setattr(activities, "_ACTIVITY_SNAPSHOTS", {})
 
@@ -235,7 +269,7 @@ def test_runtime_calls_match_pinned_used_surface(monkeypatch: Any) -> None:
         (operation["method"], operation["path"]) for operation in fixture["operations"]
     }
     actual_operations = {(call["method"], call["path"]) for call in recorder.calls}
-    assert len(recorder.calls) == len(expected_operations) == 18
+    assert len(recorder.calls) == len(expected_operations) == 22
     assert actual_operations == expected_operations
 
     operation_contracts = {
@@ -327,6 +361,7 @@ def _minimal_spec_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         if schema["required_fields"]:
             projected_schema["required"] = list(schema["required_fields"])
         document["components"]["schemas"][name] = projected_schema
+    document["components"]["schemas"].update(deepcopy(fixture["response_schemas"]))
 
     for operation in fixture["operations"]:
         path_item = document["paths"].setdefault(operation["path"], {})
@@ -334,15 +369,17 @@ def _minimal_spec_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
             "operationId": operation["operationId"],
             "parameters": [],
         }
-        for parameter in operation["required_parameters"]:
+        for parameter in operation["required_parameters"] + operation.get("optional_parameters", []):
             operation_object["parameters"].append(
                 {
                     "in": parameter["in"],
                     "name": parameter["name"],
-                    "required": True,
+                    "required": parameter["required"],
                     "schema": deepcopy(parameter["schema"]),
                 }
             )
+        if "responses" in operation:
+            operation_object["responses"] = deepcopy(operation["responses"])
         if "request_schema" in operation:
             operation_object["requestBody"] = {
                 "content": {
@@ -405,3 +442,19 @@ def test_checker_requires_explicit_hash_override_and_reports_semantic_drift(
     drift_output = capsys.readouterr().err
     assert "selected OpenAPI surface drifted" in drift_output
     assert '"oldest"' in drift_output
+
+
+@pytest.mark.parametrize("changed", ["message_id_type", "ack_id_type", "read_limit", "ack_response"])
+def test_checker_pins_comment_identity_and_bounded_read_evidence(changed: str) -> None:
+    fixture = _load_fixture()
+    document = _minimal_spec_from_fixture(fixture)
+    messages = document["paths"]["/api/v1/activity/{id}/messages"]
+    if changed in {"message_id_type", "ack_id_type"}:
+        name = "Message" if changed == "message_id_type" else "NewMsg"
+        document["components"]["schemas"][name]["properties"]["id"]["type"] = "string"
+    elif changed == "read_limit":
+        limit = next(parameter for parameter in messages["get"]["parameters"] if parameter["name"] == "limit")
+        limit["schema"]["default"] = 10
+    else:
+        messages["post"]["responses"]["200"]["content"]["*/*"]["schema"]["$ref"] = "#/components/schemas/Message"
+    assert checker.project_spec(document, fixture["source"]["sha256"]) != fixture

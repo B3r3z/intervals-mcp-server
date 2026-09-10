@@ -23,9 +23,12 @@ DEFAULT_FIXTURE = REPOSITORY_ROOT / "tests" / "contracts" / "intervals-openapi-u
 SELECTED_OPERATIONS: tuple[tuple[str, str, str], ...] = (
     ("GET", "/api/v1/activity/{id}", "getActivity"),
     ("GET", "/api/v1/activity/{id}/intervals", "getIntervals"),
+    ("GET", "/api/v1/activity/{id}/interval-stats", "getIntervalStats"),
+    ("GET", "/api/v1/activity/{id}/best-efforts", "findBestEfforts"),
     ("GET", "/api/v1/activity/{id}/messages", "listActivityMessages"),
     ("POST", "/api/v1/activity/{id}/messages", "sendActivityMessage"),
     ("GET", "/api/v1/activity/{id}/streams{ext}", "getActivityStreams"),
+    ("GET", "/api/v1/activity/{id}/power-curves{ext}", "listActivityPowerCurves_1"),
     ("GET", "/api/v1/athlete/{id}/activities", "listActivities"),
     ("GET", "/api/v1/athlete/{id}/events{format}", "listEvents"),
     ("POST", "/api/v1/athlete/{id}/events", "createEvent"),
@@ -34,6 +37,7 @@ SELECTED_OPERATIONS: tuple[tuple[str, str, str], ...] = (
     ("DELETE", "/api/v1/athlete/{id}/events/{eventId}", "deleteEvent"),
     ("GET", "/api/v1/athlete/{id}/wellness{ext}", "listWellnessRecords"),
     ("GET", "/api/v1/athlete/{id}/power-curves{ext}", "listAthletePowerCurves"),
+    ("GET", "/api/v1/athlete/{athleteId}/sport-settings/{id}", "getSettings_1"),
     ("GET", "/api/v1/athlete/{id}/custom-item", "listCustomItems"),
     ("POST", "/api/v1/athlete/{id}/custom-item", "createCustomItem"),
     ("GET", "/api/v1/athlete/{id}/custom-item/{itemId}", "getCustomItem"),
@@ -42,6 +46,7 @@ SELECTED_OPERATIONS: tuple[tuple[str, str, str], ...] = (
 )
 
 REQUEST_SCHEMAS: tuple[str, ...] = ("CustomItem", "EventEx", "NewActivityMsg")
+RESPONSE_SCHEMAS: tuple[str, ...] = ("Message", "NewMsg")
 SECURITY_SCHEMES: tuple[str, ...] = ("APIKey", "AccessToken")
 
 EXCEPTIONS: tuple[dict[str, Any], ...] = (
@@ -50,6 +55,7 @@ EXCEPTIONS: tuple[dict[str, Any], ...] = (
         "scope": {
             "operations": [
                 "GET /api/v1/activity/{id}/streams{ext}",
+                "GET /api/v1/activity/{id}/power-curves{ext}",
                 "GET /api/v1/athlete/{id}/events{format}",
                 "GET /api/v1/athlete/{id}/power-curves{ext}",
                 "GET /api/v1/athlete/{id}/wellness{ext}",
@@ -117,7 +123,7 @@ def _resolve_local_ref(document: dict[str, Any], value: Any, context: str) -> di
 def _schema_descriptor(document: dict[str, Any], value: Any, context: str) -> dict[str, Any]:
     schema = _resolve_local_ref(document, value, context)
     descriptor: dict[str, Any] = {}
-    for key in ("type", "format"):
+    for key in ("type", "format", "default"):
         if key in schema:
             descriptor[key] = schema[key]
     items = schema.get("items")
@@ -129,11 +135,13 @@ def _schema_descriptor(document: dict[str, Any], value: Any, context: str) -> di
     return descriptor
 
 
-def _required_parameters(
+def _project_parameters(
     document: dict[str, Any],
     path_item: dict[str, Any],
     operation: dict[str, Any],
     operation_key: str,
+    *,
+    required: bool = True,
 ) -> list[dict[str, Any]]:
     parameters: dict[tuple[str, str], dict[str, Any]] = {}
     for owner, raw_parameters in (
@@ -156,13 +164,13 @@ def _required_parameters(
 
     projected: list[dict[str, Any]] = []
     for (location, name), parameter in sorted(parameters.items()):
-        if parameter.get("required") is not True:
+        if (parameter.get("required") is True) != required:
             continue
         projected.append(
             {
                 "in": location,
                 "name": name,
-                "required": True,
+                "required": required,
                 "schema": _schema_descriptor(
                     document,
                     parameter.get("schema", {}),
@@ -243,10 +251,17 @@ def project_spec(document: dict[str, Any], source_sha256: str) -> dict[str, Any]
             "method": method,
             "operationId": operation_id,
             "path": path,
-            "required_parameters": _required_parameters(
+            "required_parameters": _project_parameters(
                 document, path_item, operation, operation_key
             ),
         }
+        if path == "/api/v1/activity/{id}/messages":
+            projected["optional_parameters"] = _project_parameters(
+                document, path_item, operation, operation_key, required=False
+            )
+            # Only these response shapes establish evidence for verified publication.
+            responses = _as_object(operation.get("responses"), f"{operation_key} responses")
+            projected["responses"] = {"200": deepcopy(responses.get("200"))}
         request_schema = _request_schema_name(document, operation, operation_key)
         if request_schema is not None:
             projected["request_schema"] = request_schema
@@ -276,6 +291,12 @@ def project_spec(document: dict[str, Any], source_sha256: str) -> dict[str, Any]
         "security": _project_security(document),
         "operations": operations,
         "schemas": _project_schemas(document),
+        "response_schemas": {
+            name: deepcopy(_resolve_local_ref(
+                document, {"$ref": f"#/components/schemas/{name}"}, f"schema {name}"
+            ))
+            for name in RESPONSE_SCHEMAS
+        },
         "exceptions": list(deepcopy(EXCEPTIONS)),
     }
 
@@ -350,10 +371,12 @@ def check_contract(
         if actual_hash != pinned_hash.upper():
             return (
                 True,
-                "Selected 18-operation surface matches, but source SHA256 changed from "
+                f"Selected {len(SELECTED_OPERATIONS)}-operation surface matches, but source SHA256 changed from "
                 f"{pinned_hash.upper()} to {actual_hash}; pinned provenance was not updated.",
             )
-        return True, "Selected 18-operation OpenAPI surface and source SHA256 match."
+        return True, (
+            f"Selected {len(SELECTED_OPERATIONS)}-operation OpenAPI surface and source SHA256 match."
+        )
     except ProjectionError as exc:
         return False, f"OpenAPI contract check failed: {exc}"
 

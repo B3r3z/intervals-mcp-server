@@ -252,8 +252,14 @@ Once the server is running and Claude Desktop is configured, you can use the fol
 - `get_activities`: Retrieve a list of activities
 - `get_activity_details`: Get detailed information for a specific activity
 - `get_activity_intervals`: Get detailed interval data for a specific activity
+- `get_session_context`: Compose requested details, intervals, plan, comments, and wellness sections with explicit compact limits, provenance, and full-read follow-ups.
 - `get_activity_streams`: Get compact stream previews by default; pass inclusive `start_index` and exclusive `end_index` together for exact full samples in a JSON range.
 - `get_athlete_power_curves`: Get best power output curves for selected durations and time periods
+- `get_activity_power_curves`: Read an activity's upstream watts curves; durations are seconds, curve indices are sample indices, and `detail="full"` preserves large raw arrays.
+- `get_activity_interval_stats`: Read raw interval statistics for a half-open sample-index range; use the time stream to map indices to seconds.
+- `get_activity_best_efforts`: Find upstream efforts by one duration-in-seconds or distance-in-metres selector without MCP FTP or VO2 calculations.
+- `get_sport_settings`: Read current-at-fetch sport settings or a settings ID; FTP/power are W, W' is J, fatigue thresholds are kJ, heart rate is bpm, and threshold pace is m/s regardless of display pace units.
+- `get_metric_definitions`: Read the local curated metric catalogue before interpreting streams, intervals, wellness, or custom definitions; unknown selectors remain explicit and no account data is fetched.
 - `get_wellness_data`: Fetch wellness data
 - `get_events`: Retrieve upcoming events (workouts, races, etc.)
 - `get_event_by_id`: Get detailed information for a specific event
@@ -297,6 +303,54 @@ Install development dependencies and run the test suite with:
 uv sync --all-extras
 pytest -v tests
 ```
+
+The deterministic V1 evaluation uses a real stdio `ClientSession` over a
+synthetic `httpx.MockTransport`; it never reaches an Intervals account. Capture
+the twelve scenarios and their private request/audit state with:
+
+```powershell
+$env:PYTHON_DOTENV_DISABLED = '1'
+uv run python -m tests.v1_scenario_harness `
+  --output tests/evidence/v1_deterministic_protocol.json `
+  --private-root .runtime/v1-deterministic-private
+```
+
+For a blind client, use the bridge with a separate persistent private state
+directory. `list` writes the public tool catalogue; `call` writes the complete
+MCP `CallToolResult` to the requested output path. Request logs, artifacts,
+operation files, and byte/HTTP audits stay under `--state-dir`.
+
+```powershell
+uv run python -m tests.v1_client_bridge --state-dir .runtime/v1-blind-private `
+  list --output .runtime/v1-tool-list.json
+uv run python -m tests.v1_client_bridge --state-dir .runtime/v1-blind-private `
+  --case S01 call get_session_context --args-file .runtime/args.json `
+  --output .runtime/v1-result.json
+```
+
+The original six-call replay keeps its frozen inputs in
+`tests/evidence/stage0_read_protocol_baseline.json`. Use the additive harness
+flags to replay only those calls against either the current checkout or the
+archived source without changing that baseline:
+
+```powershell
+New-Item -ItemType Directory -Force .runtime | Out-Null
+git archive --format=zip --output=.runtime/stage0-source.zip `
+  71381d42b2d9bae8c1f841cc55fd9b3ef3be0e53 src
+Expand-Archive -LiteralPath .runtime/stage0-source.zip `
+  -DestinationPath .runtime/stage0-source
+
+uv run python -m tests.protocol_read_harness --baseline-only `
+  --output .runtime/v1-baseline-current.json
+uv run python -m tests.protocol_read_harness --baseline-only `
+  --server-source .runtime/stage0-source/src `
+  --output .runtime/v1-baseline-stage0.json
+```
+
+Create the archive directory once; an existing copy can be reused. This exports
+source from Git without changing the checkout or index. Final local acceptance,
+per-scenario costs and the independent agent evaluation are recorded in
+[TATRA_V3_ACCEPTANCE.md](TATRA_V3_ACCEPTANCE.md); live verification is separate.
 
 ### Running the server locally
 
@@ -439,7 +493,44 @@ is inclusive and `end_date_exclusive` is exclusive, with an explicit timezone.
 Large activity data is written only to the configured `INTERVALS_ARTIFACT_DIR`
 (default `.runtime/artifacts`) by `export_activity_data`. Manifests include a
 SHA-256 hash, snapshot, size, range, expiry, and local absolute path, never the
-full samples. Artifacts are temporary and should be re-created after expiry.
+full samples. An MCP-only client can call `get_artifact_chunk` with the opaque
+artifact ID, decode and concatenate the base64 byte chunks, verify the complete
+SHA-256, and only then decode the UTF-8 JSON. A chunk can split a multibyte
+character. The artifact combines separate stream and interval HTTP reads, so its
+hash verifies local content rather than an atomic upstream snapshot; source
+completeness remains unknown. With no stream-type filter, the export contains all
+streams returned by the export request, including duplicate or custom streams.
+Artifacts are temporary and should be re-created after expiry.
+
+`get_activity_streams(mode="range")` accepts at most 10,000 sample indices per
+call and rejects a larger range before requesting Intervals.icu. Use
+`export_activity_data` and `get_artifact_chunk` for a larger complete transfer;
+the range endpoint never silently trims the requested range.
+
+Use `get_metric_definitions` as the local interpretation guide: it distinguishes
+sample indices from seconds, elapsed from moving time, processed from raw watts
+and heart rate, W/kg from Normalized Power, and upstream reported, calculated,
+estimated, and unknown origins. Its catalogue is curated and non-exhaustive;
+unknown selectors stay explicit and no account request is made. Stream alignment
+is based on returned array lengths only, so null, duplicate, irregular, or
+non-monotonic time values remain source data. Custom-item reads treat scripts and
+descriptions as untrusted data: compact responses list omissions and provide a
+full continuation, while full responses preserve parsed upstream fields and put
+derived metadata warnings outside the raw item.
+
+`get_session_context` fetches only requested sections. The default is activity
+details with embedded intervals plus comments; a comments-only request does not
+fetch activity details or require an athlete ID. Compact mode preserves upstream
+order without claiming chronology and limits output to 20 comments, 100
+intervals and 100 groups, 10 wellness rows, 4,000 characters per projected text
+field, and a whole workout step tree of at most 32,768 UTF-8 bytes. A larger
+step tree is omitted whole with a `detail="full"` continuation. Plan lookup
+follows only a positive numeric `paired_event_id`, reads that raw event, derives
+the event's own date, then selects exactly one same-ID row from the day's
+`resolve=true` list. Failed resolution retains the raw event. The fetched plan
+is the current stored version. Activity-assigned thresholds, stored event or
+workout thresholds, and current sport settings remain distinct; this tool does
+not fetch or substitute current settings.
 
 `get_capabilities` reports implementation, configuration, and live verification
 separately. No live Intervals account verification is claimed by fixture tests;
@@ -458,9 +549,58 @@ Workout dates carry an explicit IANA timezone and default to `Europe/Warsaw`.
 
 `INTERVALS_ACCESS_MODE=admin` exposes legacy and safe writes, `coach` exposes
 only the safe write surface, and `readonly` hides mutation tools while retaining
-the read-only `get_write_status`. Live account verification is not implied by
+`get_write_status` and `get_analysis_comment_status`. Live account verification is not implied by
 these capabilities; uncertain writes remain explicitly subject to
 reconciliation.
+
+## Coach catalogue and analysis comments
+
+One declared catalogue supplies registration, access modes and the exhaustive
+`get_capabilities.data.tool_catalogue`. The running server resolves its mode at
+startup: admin exposes 32 tools, coach 24, readonly 22. An invalid mode falls back
+to readonly. Changing the environment requires a new server instance. Each entry
+describes upstream and local effects; readonly prohibits upstream mutations,
+while artifact export and journal reconciliation can still write local files.
+
+`publish_analysis_comment(activity_id, analysis_uid, content)` is available in
+coach and admin. Use a stable `analysis_uid` for one version of an activity's
+analysis. The tool binds it to the configured athlete, activity and exact content;
+the content is preserved, with a local limit of 100,000 characters. Repeating that
+intent returns its recorded result without another POST. Reusing the UID with
+different content or activity returns a conflict. A deliberately new analysis
+version uses a new UID and appends a comment, preserving the earlier history.
+
+For example, publish `activity_id="i123456"`, `analysis_uid="i123456-analysis-v1"`
+and the analysis as `content`. Retain all three values for any repeat call. Inspect
+the outcome with `get_analysis_comment_status(analysis_uid="i123456-analysis-v1",
+reconcile=True)`.
+
+Confirmation requires a separate activity-message GET containing the acknowledged
+numeric message ID and exact content. The POST acknowledgement alone cannot
+confirm publication. Timeout, a lost or malformed ID, unavailable read-back or
+absence from a bounded list stays `unknown`; conflicting content, activity identity
+or a deletion marker produces `mismatch`. Reconciliation performs reads only and
+returns historical confirmation separately from current observation. It cannot
+recover a lost ID by matching prose or timestamps, or automatically publish again.
+Use the status result to resolve uncertainty; changing the UID to retry an
+uncertain publication can create a duplicate.
+
+Comment records live under `INTERVALS_OPERATION_DIR/analysis-comments`, separate
+from existing workout records, and use the same account lock as workout writes.
+All processes writing for one account must share and retain that operation
+directory. The replay guarantee depends on those records; upstream idempotency
+and live account behavior remain unverified.
+
+`get_activity_messages` preserves returned identity, deletion metadata and content,
+but its default upstream list is limited to 100 messages. Full history coverage
+remains unknown. Compact session context also preserves documented message identity
+and deletion fields, and exposes full-read continuations for projected omissions.
+
+The three architecture changes and their acceptance criteria are described in
+[`docs/architecture/coach-tools-design.md`](docs/architecture/coach-tools-design.md).
+The synthetic coach-cycle test uses actual MCP discovery and calls to read the
+session and linked plan, publish/replay/revise analysis, verify a subsequent
+workout, and repeat calls after process restarts.
 
 The scenario-by-scenario fixture and live-verification status is recorded in
 [`TATRA_V3_ACCEPTANCE.md`](TATRA_V3_ACCEPTANCE.md).

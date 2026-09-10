@@ -79,7 +79,7 @@ def test_make_intervals_request_bad_json(monkeypatch, caplog):
     monkeypatch.setenv("ATHLETE_ID", "i1")
     # Reset the singleton so config picks up the monkeypatched env vars
     monkeypatch.setattr("intervals_mcp_server.config._config_instance", None)
-    monkeypatch.setattr(server, "httpx_client", MockAsyncClient())
+    monkeypatch.setattr(api_client, "httpx_client", MockAsyncClient())
     monkeypatch.setattr(
         api_client,
         "get_config",
