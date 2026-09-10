@@ -134,6 +134,42 @@
     },
     {
       "method": "GET",
+      "operationId": "getPowerVsHR",
+      "optional_parameters": [],
+      "path": "/api/v1/activity/{id}/power-vs-hr{ext}",
+      "required_parameters": [
+        {
+          "in": "path",
+          "name": "ext",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "content": {
+            "*/*": {
+              "schema": {
+                "$ref": "#/components/schemas/PowerVsHRPlot"
+              }
+            }
+          },
+          "description": "OK"
+        }
+      }
+    },
+    {
+      "method": "GET",
       "operationId": "listActivityMessages",
       "optional_parameters": [
         {
@@ -618,6 +654,54 @@
   ],
   "projection_version": 1,
   "response_schemas": {
+    "Bucket": {
+      "properties": {
+        "cadence": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "hr": {
+          "format": "double",
+          "type": "number"
+        },
+        "movingSecs": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "secs": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "start": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "watts": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Curve": {
+      "properties": {
+        "coefficients": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "r2": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "Message": {
       "properties": {
         "accept_coaching_group_id": {
@@ -702,6 +786,94 @@
         },
         "new_chat": {
           "$ref": "#/components/schemas/Chat"
+        }
+      },
+      "type": "object"
+    },
+    "PowerVsHRPlot": {
+      "properties": {
+        "avgCadenceZ2": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "bucketSize": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "cooldown": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "curves": {
+          "items": {
+            "$ref": "#/components/schemas/Curve"
+          },
+          "type": "array"
+        },
+        "decoupling": {
+          "format": "float",
+          "type": "number"
+        },
+        "elapsedTime": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "end": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "hrLag": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "hrZ2BucketCount": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "medianCadenceZ2": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "mid": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "powerHr": {
+          "format": "float",
+          "type": "number"
+        },
+        "powerHrFirst": {
+          "format": "float",
+          "type": "number"
+        },
+        "powerHrSecond": {
+          "format": "float",
+          "type": "number"
+        },
+        "powerHrZ2": {
+          "format": "float",
+          "type": "number"
+        },
+        "ratioCoefficients": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "series": {
+          "items": {
+            "$ref": "#/components/schemas/Bucket"
+          },
+          "type": "array"
+        },
+        "start": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "warmup": {
+          "format": "int32",
+          "type": "integer"
         }
       },
       "type": "object"

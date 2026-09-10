@@ -43,7 +43,9 @@ from intervals_mcp_server.tools.session_context import get_session_context  # no
 from intervals_mcp_server.tools.analytics import (  # noqa: F401
     get_activity_best_efforts,
     get_activity_interval_stats,
+    get_activity_power_hr,
 )
+from intervals_mcp_server.tools.quality import get_activity_data_quality  # noqa: F401
 from intervals_mcp_server.tools.capabilities import get_capabilities  # noqa: F401
 from intervals_mcp_server.tools.analysis_comments import (  # noqa: F401
     publish_analysis_comment,

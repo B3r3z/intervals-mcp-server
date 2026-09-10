@@ -357,15 +357,15 @@ def _enforce_retention(root: Path, max_files: int, newest_id: str) -> None:
 def write_activity_artifact(
     payload: dict[str, Any],
     *,
-    snapshot_id: str,
     source: str,
     expires_in: int | None = None,
     now: Clock | None = None,
 ) -> dict[str, Any]:
-    """Publish a payload then its sidecar under a process-local store lock.
+    """Derive local content identity, then publish payload and sidecar together.
 
     A failed sidecar write removes the newly named payload. Existing artifacts
-    are cleaned or retained only after the new pair has been published.
+    are cleaned or retained only after the new pair has been published. The
+    snapshot and artifact hash describe the exact serialized bytes written here.
     """
     ttl_seconds = (
         _positive_env("INTERVALS_ARTIFACT_TTL_SECONDS", 3_600)
@@ -388,8 +388,6 @@ def write_activity_artifact(
     if max_bytes and len(raw) > max_bytes:
         raise ValueError("artifact exceeds configured maximum size")
     digest = hashlib.sha256(raw).hexdigest()
-    if snapshot_id != digest:
-        raise ValueError("artifact snapshot must match the local content hash")
     created_at = _utc_now(now)
     expires_at = created_at + timedelta(seconds=ttl_seconds)
     provenance = _artifact_provenance()
@@ -414,7 +412,7 @@ def write_activity_artifact(
             "encoding": "utf-8",
             "size": len(raw),
             "artifact_hash": digest,
-            "snapshot_id": snapshot_id,
+            "snapshot_id": digest,
             "source": source,
             "created_at": created_at.isoformat(),
             "expires_at": expires_at.isoformat(),
@@ -456,7 +454,7 @@ def write_activity_artifact(
 
     return {
         "artifact_id": artifact_id,
-        "snapshot_id": snapshot_id,
+        "snapshot_id": digest,
         "format": "json",
         "encoding": "utf-8",
         "size": len(raw),

@@ -578,7 +578,12 @@ def _route(request: httpx.Request) -> httpx.Response:
         if resource == "best-efforts":
             return _response(request, _best_efforts(activity_id))
         if resource == "power-curves":
-            return _response(request, _activity_curves(activity_id))
+            curves = _activity_curves(activity_id)
+            if activity_id == "a-fatigue":
+                requested = request.url.params.get("fatigue", "normal").split(",")
+                curves = [curve for selector, curve in zip(("normal", "kj0", "kj1"), curves, strict=True)
+                          if selector in requested]
+            return _response(request, curves)
 
     if path == "/api/v1/athlete/i123/power-curves":
         return _response(request, _athlete_curves())

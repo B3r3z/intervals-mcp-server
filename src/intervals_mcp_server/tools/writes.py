@@ -114,7 +114,30 @@ def _same_event(event: dict[str, Any], _intent: OperationIntent, external_id: st
     return event.get("external_id") == external_id
 
 
+def _scalar_differences(expected: Any, actual: Any, path: str) -> list[dict[str, Any]]:
+    # JSON booleans are not workout numbers, despite True == 1 in Python.
+    equal = expected == actual and isinstance(expected, bool) == isinstance(actual, bool)
+    return [] if equal else [{"field": path, "expected": expected, "actual": actual}]
+
+
+def _target_differences(expected: Any, actual: Any, path: str) -> list[dict[str, Any]]:
+    """Compare the prescribed Value fields, excluding upstream resolved metadata."""
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        differences = []
+        for field in sorted({"value", "start", "end", "units", "target"} & (expected.keys() | actual.keys())):
+            differences.extend(
+                _scalar_differences(expected.get(field), actual.get(field), f"{path}.{field}")
+            )
+        return differences
+    return _scalar_differences(expected, actual, path)
+
+
 def _step_differences(expected: Any, actual: Any, path: str = "steps") -> list[dict[str, Any]]:
+    """Compare Step structure and delegate intensity objects to their Value schema.
+
+    Omitted optional fields and explicit null remain equivalent. Unknown upstream
+    metadata (including resolved _power/_hr/_pace) is not a prescription field.
+    """
     supported = {
         "duration",
         "distance",
@@ -144,11 +167,16 @@ def _step_differences(expected: Any, actual: Any, path: str = "steps") -> list[d
     if isinstance(expected, dict) and isinstance(actual, dict):
         differences = []
         for field in sorted(supported & (set(expected) | set(actual))):
+            compare = (
+                _step_differences if field == "steps"
+                else _target_differences if field in {"power", "hr", "pace", "cadence"}
+                else _scalar_differences
+            )
             differences.extend(
-                _step_differences(expected.get(field), actual.get(field), f"{path}.{field}")
+                compare(expected.get(field), actual.get(field), f"{path}.{field}")
             )
         return differences
-    return [] if expected == actual else [{"field": path, "expected": expected, "actual": actual}]
+    return _scalar_differences(expected, actual, path)
 
 
 def _timed_duration(steps: Any) -> int | None:
@@ -235,7 +263,10 @@ def _verification(
                 actual_fingerprint=event_fingerprint(observed),
                 checked_fields=checked_fields,
             )
-        differences.extend(_step_differences(intent.workout.steps, doc.get("steps")))
+        differences.extend(
+            _step_differences(intent.workout.steps, doc.get("steps"), "workout_doc.steps")
+        )
+        checked_fields.append("workout_doc.steps")
         duration = _timed_duration(intent.workout.steps)
         if duration is not None and not differences:
             if doc.get("duration") is None:
@@ -250,14 +281,10 @@ def _verification(
                     actual_fingerprint=event_fingerprint(observed),
                     checked_fields=checked_fields,
                 )
-            if doc.get("duration") != duration:
-                differences.append(
-                    {
-                        "field": "workout_doc.duration",
-                        "expected": duration,
-                        "actual": doc.get("duration"),
-                    }
-                )
+            differences.extend(
+                _scalar_differences(duration, doc.get("duration"), "workout_doc.duration")
+            )
+            checked_fields.append("workout_doc.duration")
     elif (
         intent.workout
         and intent.workout.representation == "native_text"
@@ -405,8 +432,8 @@ async def _apply_workout_change(
     try:
         historical = journal.load(intent.operation_uid)
         if historical:
-            if historical.get("intent_fingerprint") == fingerprint:
-                historical_result = OperationResult.model_validate(historical["result"])
+            if historical.intent_fingerprint == fingerprint:
+                historical_result = historical.result
                 if historical_result.outcome in {"prepared", "in_flight"}:
                     historical_result = _error_result(
                         intent,
@@ -417,7 +444,7 @@ async def _apply_workout_change(
                         intent_fingerprint=fingerprint,
                         diagnostics={"replayed_outcome": historical_result.outcome},
                     )
-                    journal.save(intent, historical_result, decision_uid)
+                    historical_result = journal.save(intent, historical_result, decision_uid)
                 return WriteResponse(
                     status=_response_status(historical_result),
                     decision_uid=decision_uid,
@@ -437,8 +464,8 @@ async def _apply_workout_change(
         ext = external_id_for_session(intent.session_uid)
         if intent.action == "create":
             for record in journal.find_by_session(intent.session_uid):
-                prior = record.get("result", {})
-                if prior.get("outcome") == "confirmed":
+                prior = record.result
+                if prior.outcome == "confirmed":
                     result = _error_result(
                         intent,
                         "SESSION_ALREADY_EXISTS",
@@ -449,7 +476,7 @@ async def _apply_workout_change(
                     return WriteResponse(
                         status=_response_status(result), decision_uid=decision_uid, results=[result]
                     )
-                elif prior.get("outcome") in {"prepared", "in_flight", "unknown", "mismatch"}:
+                elif prior.outcome in {"prepared", "in_flight", "unknown", "mismatch"}:
                     result = _error_result(
                         intent,
                         "SESSION_RECONCILIATION_REQUIRED",
@@ -471,7 +498,7 @@ async def _apply_workout_change(
                 result = _result_from_api_error(
                     intent, existing, sent=False, external_id=ext, fingerprint=fingerprint
                 )
-                journal.save(intent, result, decision_uid)
+                result = journal.save(intent, result, decision_uid)
                 return WriteResponse(status="error", decision_uid=decision_uid, results=[result])
             if not isinstance(existing, list):
                 result = _error_result(
@@ -482,7 +509,7 @@ async def _apply_workout_change(
                     external_id=ext,
                     intent_fingerprint=fingerprint,
                 )
-                journal.save(intent, result, decision_uid)
+                result = journal.save(intent, result, decision_uid)
                 return WriteResponse(
                     status=_response_status(result),
                     decision_uid=decision_uid,
@@ -501,7 +528,7 @@ async def _apply_workout_change(
                     "conflict",
                     external_id=ext,
                 )
-                journal.save(intent, result, decision_uid)
+                result = journal.save(intent, result, decision_uid)
                 return WriteResponse(status="error", decision_uid=decision_uid, results=[result])
             if matches:
                 result = _error_result(
@@ -511,7 +538,7 @@ async def _apply_workout_change(
                     "conflict",
                     event_id=matches[0].get("id"),
                 )
-                journal.save(intent, result, decision_uid)
+                result = journal.save(intent, result, decision_uid)
                 return WriteResponse(status="error", decision_uid=decision_uid, results=[result])
             prepared = _result(intent, "prepared", external_id=ext, intent_fingerprint=fingerprint)
             journal.save(intent, prepared, decision_uid)
@@ -529,7 +556,7 @@ async def _apply_workout_change(
                 result = _result_from_api_error(
                     intent, mutation, sent=True, external_id=ext, fingerprint=fingerprint
                 )
-                journal.save(intent, result, decision_uid)
+                result = journal.save(intent, result, decision_uid)
                 return WriteResponse(status="error", decision_uid=decision_uid, results=[result])
             event_id = mutation.get("id") if isinstance(mutation, dict) else None
             if event_id is None:
@@ -542,7 +569,7 @@ async def _apply_workout_change(
             else:
                 observed = await _read_event(config.athlete_id, event_id, config.api_key)
                 result = _verification(intent, observed, ext, event_id)
-            journal.save(intent, result, decision_uid)
+            result = journal.save(intent, result, decision_uid)
             return WriteResponse(
                 status=_response_status(result),
                 decision_uid=decision_uid,
@@ -558,7 +585,7 @@ async def _apply_workout_change(
                 fingerprint=fingerprint,
                 event_id=intent.event_id,
             )
-            journal.save(intent, result, decision_uid)
+            result = journal.save(intent, result, decision_uid)
             return WriteResponse(status="error", decision_uid=decision_uid, results=[result])
         if (
             not isinstance(target, dict)
@@ -570,7 +597,7 @@ async def _apply_workout_change(
             result = _error_result(
                 intent, "OUT_OF_SCOPE", "target is not the managed workout for this session"
             )
-            journal.save(intent, result, decision_uid)
+            result = journal.save(intent, result, decision_uid)
             return WriteResponse(status="error", decision_uid=decision_uid, results=[result])
         if event_fingerprint(target) != intent.expected_fingerprint:
             result = _error_result(
@@ -582,7 +609,7 @@ async def _apply_workout_change(
                 actual_fingerprint=event_fingerprint(target),
                 expected_fingerprint=intent.expected_fingerprint,
             )
-            journal.save(intent, result, decision_uid)
+            result = journal.save(intent, result, decision_uid)
             return WriteResponse(status="error", decision_uid=decision_uid, results=[result])
         target_start_date = str(
             target.get("start_date_local", target.get("date", ""))
@@ -692,7 +719,7 @@ async def _apply_workout_change(
         else:
             reread = await _read_event(config.athlete_id, intent.event_id, config.api_key)
             result = _verification(intent, reread, ext, intent.event_id)
-        journal.save(intent, result, decision_uid)
+        result = journal.save(intent, result, decision_uid)
         return WriteResponse(
             status=_response_status(result),
             decision_uid=decision_uid,
@@ -873,14 +900,14 @@ async def get_write_status(operation_uid: str, reconcile: bool = False) -> Write
                 synthetic, "OPERATION_NOT_FOUND", "operation not found"
             ),
         )
-    historical = OperationResult.model_validate(record["result"])
+    historical = record.result
     if not reconcile:
         return WriteStatusResponse(
             status=_response_status(historical),
             operation_uid=operation_uid,
             historical_result=historical,
         )
-    intent = OperationIntent.model_validate(record["intent"])
+    intent = record.intent
     if not config.api_key:
         return WriteStatusResponse(
             status="error",
@@ -891,7 +918,7 @@ async def get_write_status(operation_uid: str, reconcile: bool = False) -> Write
             ),
         )
     external_id = historical.external_id or external_id_for_session(intent.session_uid)
-    event_id = historical.event_id or intent.event_id
+    event_id = historical.event_id if historical.event_id is not None else intent.event_id
     observed: Any = None
     current_observation: dict[str, Any] | None = None
     if event_id is not None:
@@ -989,7 +1016,15 @@ async def get_write_status(operation_uid: str, reconcile: bool = False) -> Write
         result = _verification(intent, observed, external_id, event_id)
         current_observation = observed if isinstance(observed, dict) else None
     if result.outcome == "confirmed" and historical.outcome != "confirmed":
-        journal.save(intent, result, record.get("decision_uid"))
+        try:
+            result = journal.save(intent, result, record.decision_uid)
+        except (JournalCorruptError, OSError) as exc:
+            result = result.model_copy(update={
+                "outcome": "unknown",
+                "code": "JOURNAL_CORRUPT" if isinstance(exc, JournalCorruptError) else "JOURNAL_WRITE_FAILED",
+                "message": "Reconciliation was read back but its journal update could not be persisted.",
+                "diagnostics": {**result.diagnostics, "read_back_outcome": "confirmed", "journal_updated": False},
+            })
     return WriteStatusResponse(
         status=_response_status(result),
         operation_uid=operation_uid,

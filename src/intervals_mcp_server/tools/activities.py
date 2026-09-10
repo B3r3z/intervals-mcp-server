@@ -21,6 +21,9 @@ from intervals_mcp_server.contracts import (
     upstream_failure,
 )
 from intervals_mcp_server.artifacts import ArtifactStoreError, write_activity_artifact
+from intervals_mcp_server.intervals import interval_evidence
+from intervals_mcp_server.stream_quality import STREAM_UNITS, participates_in_alignment
+from intervals_mcp_server.respiratory import respiratory_guidance
 import secrets
 import time
 from intervals_mcp_server.utils.ranges import range_query, validate_range
@@ -59,32 +62,6 @@ def _validate_stream_payload(value: Any) -> str | None:
     return None
 
 
-def _validate_intervals_payload(value: Any) -> str | None:
-    """Validate interval containers, including the live nullable groups variant."""
-    if isinstance(value, list):
-        if any(not isinstance(row, dict) for row in value):
-            return "flat interval list members must be objects"
-        return None
-    if not isinstance(value, dict):
-        return "interval response must be an object or flat list"
-    recognized = {"icu_intervals", "icu_groups"}.intersection(value)
-    if not recognized:
-        return "interval response must contain icu_intervals or icu_groups"
-    for field in ("icu_intervals", "icu_groups"):
-        if field not in recognized:
-            continue
-        rows = value[field]
-        # The live API can return null here even though its OpenAPI schema says
-        # array. Preserve that distinction instead of coercing it to an empty list.
-        if field == "icu_groups" and rows is None:
-            continue
-        if not isinstance(rows, list) or any(
-            not isinstance(row, dict) for row in rows
-        ):
-            return f"interval field {field} must be an array of objects"
-    return None
-
-
 @coach_tool(access="read", upstream="read", local="write")
 async def export_activity_data(activity_id: str, api_key: str | None = None) -> ReadResponse[Any]:
     """Export complete raw activity data to the configured local artifact.
@@ -98,6 +75,8 @@ async def export_activity_data(activity_id: str, api_key: str | None = None) -> 
     atomic upstream snapshot. Use ``get_artifact_chunk`` with the opaque ID when
     the MCP client cannot access the server filesystem. Source completeness
     remains unknown until the upstream data contract says otherwise.
+    Tymewear VT/VE remain in raw device units, with no conversion to liters;
+    use get_metric_definitions for respiratory field and FIT mapping context.
     """
     if not activity_id.strip():
         return failure(
@@ -121,29 +100,17 @@ async def export_activity_data(activity_id: str, api_key: str | None = None) -> 
         return invalid_upstream_response(
             resource="activity_export", message=stream_error
         )
-    interval_error = _validate_intervals_payload(intervals)
-    if interval_error:
+    try:
+        interval_data = interval_evidence(intervals, activity_id=activity_id)
+    except ValueError as exc:
         return invalid_upstream_response(
-            resource="activity_export", message=interval_error
+            resource="activity_export", message=str(exc)
         )
     raw_streams = streams
     # Preserve the upstream stream list verbatim, including duplicate types.
-    payload = {"activity_id": activity_id, "streams": raw_streams, "intervals": intervals}
+    payload = {"activity_id": activity_id, "streams": raw_streams, "intervals": interval_data.data}
     try:
-        import hashlib
-
-        snapshot_id = hashlib.sha256(
-            json.dumps(
-                payload,
-                allow_nan=False,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        manifest = write_activity_artifact(
-            payload, snapshot_id=snapshot_id, source=f"activity/{activity_id}"
-        )
+        manifest = write_activity_artifact(payload, source=f"activity/{activity_id}")
     except (ArtifactStoreError, OSError, TypeError, ValueError):
         return failure(
             resource="activity_export",
@@ -527,6 +494,9 @@ async def get_activity_details(
     the dedicated interval and stream tools to check those resources. Set
     ``include_intervals`` to request the upstream embedded interval container;
     missing embedded intervals still require ``get_activity_intervals``.
+    For Tymewear, VT is relative tidal volume per breath (not VT1/VT2), VE
+    is relative minute ventilation, and BR is breaths/min. Custom L/br or
+    L/min labels are not calibration evidence; use get_metric_definitions.
     """
     if not isinstance(include_intervals, bool):
         return failure(
@@ -591,20 +561,24 @@ async def get_activity_intervals(activity_id: str, api_key: str | None = None) -
     compatibility with existing callers; all other shapes and mixed rows are
     explicit errors.  Intervals use upstream sample indices, not invented
     elapsed seconds, and an empty valid container remains empty.
+    average_tidal_volume is VT and average_tidal_volume_min is VE. For
+    Tymewear their volume scale is relative; no /100-to-liters conversion
+    applies. average_respiration is BR in breaths/min. See get_metric_definitions.
     """
     result = await make_intervals_request(url=f"/activity/{activity_id}/intervals", api_key=api_key)
     failed = _read_error(result, "activity_intervals")
     if failed:
         return failed
-    shape_error = _validate_intervals_payload(result)
-    if shape_error:
+    try:
+        evidence = interval_evidence(result, activity_id=activity_id)
+    except ValueError as exc:
         return invalid_upstream_response(
             resource="activity_intervals",
-            message=shape_error,
+            message=str(exc),
             query={"activity_id": activity_id},
         )
     return success(
-        result,
+        evidence.data,
         resource="activity_intervals",
         query={"activity_id": activity_id},
         coverage={
@@ -701,6 +675,14 @@ async def get_activity_streams(
     regular, or non-null time values.  The snapshot hashes the returned
     payload for this selection, so a continuation must keep the same activity
     and ``stream_types``.
+
+    Respiratory fields: tidal_volume = VT (volume per breath, not VT1/VT2),
+    tidal_volume_min = VE (minute ventilation), respiration = BR (breaths/min).
+    When sourced from Tymewear, VT uses relative i.u. and VE relative vol/min,
+    not calibrated liters. Do not divide VT by 100 or 1000. The response adds
+    conditional documentation in provenance.respiratory_interpretation;
+    original samples and source unit labels are preserved. Use
+    get_metric_definitions and get_custom_items to check mappings and units.
     """
     import hashlib
 
@@ -887,14 +869,12 @@ async def get_activity_streams(
                 row[f"{prefix}effective_spans" if prefix else "effective_spans"] = []
                 if field == "data":
                     missing_primary_data = True
-                if mode == "range" and end_index is not None and (
-                    field == "data" or field in stream
-                ):
+                if mode == "range" and end_index is not None and field == "data":
                     row[
                         "data2_missing_indices" if field == "data2" else "missing_indices"
                     ] = [{"start_index": start_index or 0, "end_index": end_index}]
                     has_missing_indices = True
-            if field == "data2" and field not in stream:
+            if not participates_in_alignment(stream, field):
                 continue
             alignment_lengths.append(
                 {
@@ -906,21 +886,7 @@ async def get_activity_streams(
                 }
             )
         if "unit" not in row:
-            row["unit"] = {
-                "time": "s",
-                "watts": "W",
-                "raw_watts": "W",
-                "heartrate": "bpm",
-                "raw_heartrate": "bpm",
-                "cadence": "1/min",
-                "altitude": "m",
-                "distance": "m",
-                "velocity_smooth": "m/s",
-                "temperature": "C",
-                "coreTemperature": "C",
-                "skinTemperature": "C",
-                "joules": "J",
-            }.get(str(row.get("type")))
+            row["unit"] = STREAM_UNITS.get(str(row.get("type")))
         payload_streams.append(row)
 
     time_axis = None
@@ -947,6 +913,10 @@ async def get_activity_streams(
         reasons.append("MISSING_SAMPLE_INDICES")
     if time_source is None:
         reasons.append("TIME_AXIS_UNAVAILABLE")
+    response_metadata: dict[str, Any] = {}
+    respiratory_interpretation = respiratory_guidance(stream["type"] for stream in selected)
+    if respiratory_interpretation:
+        response_metadata["provenance"] = {"respiratory_interpretation": respiratory_interpretation}
     response = success(
         {
             "activity_id": activity_id,
@@ -1004,6 +974,7 @@ async def get_activity_streams(
             "reasons": reasons,
         },
         warnings=warnings,
+        **response_metadata,
     )
     if (
         preview_truncated

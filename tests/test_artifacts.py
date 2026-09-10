@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import pytest
@@ -18,23 +19,7 @@ from intervals_mcp_server.tools.activities import export_activity_data, get_acti
 from intervals_mcp_server.tools.artifacts import get_artifact_chunk
 
 
-def _snapshot(payload: dict[str, Any]) -> str:
-    raw = json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-
-def _write_artifact(
-    payload: dict[str, Any], *, source: str = "a", **kwargs: Any
-) -> dict[str, Any]:
-    return write_activity_artifact(
-        payload, snapshot_id=_snapshot(payload), source=source, **kwargs
-    )
+_write_artifact = partial(write_activity_artifact, source="a")
 
 
 def test_artifact_real_hash_duplicate_streams_and_expiry(tmp_path, monkeypatch):
@@ -58,6 +43,7 @@ def test_artifact_real_hash_duplicate_streams_and_expiry(tmp_path, monkeypatch):
     raw = path.read_bytes()
     assert manifest["size"] == len(raw)
     assert manifest["hash"]["value"] == hashlib.sha256(raw).hexdigest()
+    assert manifest["snapshot_id"] == manifest["hash"]["value"]
     assert len(manifest["sample_counts"]) == 2 and json.loads(raw) == payload
     assert manifest["sample_counts"][0]["data2_count"] == 1
     assert manifest["expires_at"] == (created_at + timedelta(seconds=1)).isoformat()
@@ -191,7 +177,6 @@ def test_failed_export_does_not_clean_existing_artifact(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         write_activity_artifact(
             {"streams": [{"type": "invalid", "data": [float("nan")]}]},
-            snapshot_id="0" * 64,
             source="a",
             now=lambda: created_at + timedelta(seconds=2),
         )

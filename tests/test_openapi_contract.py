@@ -51,6 +51,8 @@ def _normalize_runtime_path(method: str, url: str) -> str:
 
     if method == "GET" and path == "/api/v1/activity/{id}/streams":
         return path + "{ext}"
+    if method == "GET" and path == "/api/v1/activity/{id}/power-vs-hr.json":
+        return "/api/v1/activity/{id}/power-vs-hr{ext}"
     if method == "GET" and path == "/api/v1/athlete/{id}/events":
         return path + "{format}"
     if method == "GET" and path in {
@@ -102,6 +104,8 @@ class RequestRecorder:
             return {"start_index": 0, "end_index": 10, "average_watts": 200}
         if key == ("GET", "/api/v1/activity/{id}/best-efforts"):
             return {"efforts": []}
+        if key == ("GET", "/api/v1/activity/{id}/power-vs-hr{ext}"):
+            return {"hrLag": 30, "series": [], "curves": []}
         if key == ("GET", "/api/v1/activity/{id}/messages"):
             return [{"id": 1, "content": "Existing contract message"}]
         if key == ("POST", "/api/v1/activity/{id}/messages"):
@@ -161,6 +165,7 @@ async def _exercise_used_surface() -> None:
     await activities.get_activity_details(ACTIVITY_ID, **common)
     await activities.get_activity_intervals(ACTIVITY_ID, **common)
     await analytics.get_activity_interval_stats(ACTIVITY_ID, 0, 10, **common)
+    await analytics.get_activity_power_hr(ACTIVITY_ID, **common)
     await analytics.get_activity_best_efforts(
         ACTIVITY_ID, "watts", duration=60, **common
     )
@@ -269,7 +274,7 @@ def test_runtime_calls_match_pinned_used_surface(monkeypatch: Any) -> None:
         (operation["method"], operation["path"]) for operation in fixture["operations"]
     }
     actual_operations = {(call["method"], call["path"]) for call in recorder.calls}
-    assert len(recorder.calls) == len(expected_operations) == 22
+    assert len(recorder.calls) == len(expected_operations) == 23
     assert actual_operations == expected_operations
 
     operation_contracts = {

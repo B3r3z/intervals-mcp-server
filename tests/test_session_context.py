@@ -685,7 +685,6 @@ def test_missing_plan_link_uses_error_status_and_unavailable_availability(
 @pytest.mark.parametrize(
     ("paired_event_id", "error_code"),
     [
-        (None, "PAIRED_EVENT_NULL"),
         (0, "INVALID_PAIRED_EVENT_ID"),
         (False, "INVALID_PAIRED_EVENT_ID"),
         (-1, "INVALID_PAIRED_EVENT_ID"),

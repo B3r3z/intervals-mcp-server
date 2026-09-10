@@ -534,6 +534,8 @@ def _activity_curve_selection(
         "returned_fatigue": returned,
         "verified": verified,
         "basis": "explicit curve fatigue fields only; curve IDs and after_kj are not selectors",
+        "verification_state": "empty" if not curves else "not_echoed" if not returned
+        else "confirmed" if verified else "unverified",
     }
 
 
@@ -551,14 +553,15 @@ async def get_activity_power_curves(
     positive seconds selected exactly from the upstream ``secs`` axis; omitted
     durations use the standard duration set, while full detail preserves the
     complete upstream axis.  ``fatigue`` defaults to ``normal``
-    and is sent as a comma-separated upstream selector; the response keeps
+    and each distinct selector is requested independently; the response keeps
     ``after_kj`` and does not infer selector identity from curve IDs.  Compact
     points retain aligned sample indices and W/kg activity IDs, while large
     raw arrays are listed in ``omitted_fields``.  Use the supplied ``full_read``
     continuation or ``detail='full'`` when those arrays or unknown fields are
     needed.  Values are upstream watts; no MCP calculations are performed.
-    Source completeness and fatigue-selection coverage are unknown unless the
-    returned curves explicitly identify their fatigue labels.
+    Successful variants survive failures of other variants. Selection echo and
+    point completeness are separate; request context does not prove upstream
+    selector identity. HTTP 422 guidance includes checking sport settings.
     """
     resource = "activity_power_curves"
     if not isinstance(activity_id, str) or not activity_id.strip():
@@ -609,20 +612,6 @@ async def get_activity_power_curves(
         "fatigue": requested_fatigue,
         "detail": detail,
     }
-    result = await make_intervals_request(
-        url=f"/activity/{activity_id}/power-curves",
-        api_key=api_key,
-        params={"types": "watts", "fatigue": ",".join(requested_fatigue)},
-    )
-    failed = upstream_failure(result, resource=resource, query=query)
-    if failed is not None:
-        return failed
-    source_result = _activity_curve_source(result)
-    if isinstance(source_result, str):
-        return invalid_upstream_response(
-            resource=resource, message=source_result, query=query
-        )
-
     full_read = {
         "tool": "get_activity_power_curves",
         "parameters": {
@@ -634,24 +623,74 @@ async def get_activity_power_curves(
     }
     data: list[dict[str, Any]] = []
     warnings: list[str] = []
-    for curve in source_result:
-        try:
-            extracted, curve_warnings = _project_curve(
-                curve, requested_durations, detail, origin="activity", full_read=full_read,
-            )
-        except ValueError as exc:
-            return invalid_upstream_response(
-                resource=resource, message=str(exc), query=query
-            )
-        data.append(extracted)
-        warnings.extend(curve_warnings)
-
+    source_result: list[dict[str, Any]] = []
+    selector_results: list[dict[str, Any]] = []
+    failures: list[ReadResponse[Any]] = []
+    for selector in dict.fromkeys(requested_fatigue):
+        selector_query = {**query, "fatigue": [selector]}
+        result = await make_intervals_request(
+            url=f"/activity/{activity_id}/power-curves", api_key=api_key,
+            params={"types": "watts", "fatigue": selector},
+        )
+        failed = upstream_failure(result, resource=resource, query=selector_query)
+        curves = _activity_curve_source(result) if failed is None else []
+        if isinstance(curves, str):
+            failed = invalid_upstream_response(resource=resource, message=curves, query=selector_query)
+        projected: list[dict[str, Any]] = []
+        variant_warnings: list[str] = []
+        if failed is None:
+            assert isinstance(curves, list)
+            for curve in curves:
+                try:
+                    extracted, curve_warnings = _project_curve(
+                        curve, requested_durations, detail, origin="activity", full_read=full_read,
+                    )
+                except ValueError as exc:
+                    failed = invalid_upstream_response(resource=resource, message=str(exc), query=selector_query)
+                    break
+                projected.append(extracted)
+                variant_warnings.extend(curve_warnings)
+        if failed is not None:
+            if failed.error and failed.error.http_status == 422:
+                failed.error.recommended_action = (
+                    "Inspect get_sport_settings after_kj0/after_kj1 and request parameters; "
+                    "HTTP 422 alone does not prove missing configuration."
+                )
+            failures.append(failed)
+            selector_results.append({
+                "requested_fatigue": selector, "status": "error", "curve_indices": [],
+                "error": failed.error.model_dump(mode="json") if failed.error else None,
+            })
+            continue
+        assert isinstance(curves, list)
+        variant_selection = _activity_curve_selection(curves, [selector])
+        if any("fatigue" in curve and curve["fatigue"] != selector for curve in curves):
+            variant_warnings.append("FATIGUE_SELECTION_MISMATCH")
+        if selector != "normal" and curves and not all(
+            isinstance(curve.get("after_kj"), int) for curve in curves
+        ):
+            variant_warnings.append("FATIGUE_THRESHOLD_UNAVAILABLE")
+        selector_results.append({
+            "requested_fatigue": selector, "status": "partial" if variant_warnings else "ok",
+            "availability": "available" if curves else "empty",
+            "curve_indices": list(range(len(data), len(data) + len(projected))),
+            "selection": variant_selection, "warnings": list(dict.fromkeys(variant_warnings)),
+            "error": None,
+        })
+        data.extend(projected)
+        source_result.extend(curves)
+        warnings.extend(variant_warnings)
+    if failures:
+        warnings.append("FATIGUE_VARIANT_UNAVAILABLE")
+        if len(failures) == len(selector_results):
+            failed_response = failures[0]
+            failed_response.query = type(failed_response.query).model_validate(query)
+            failed_response.data = {"curves": [], "selector_results": selector_results}
+            return failed_response
     selection = _activity_curve_selection(source_result, requested_fatigue)
-    if source_result and selection["verified"] is not True:
-        warnings.append("FATIGUE_SELECTION_UNVERIFIED")
-    if source_result and any(selector != "normal" for selector in requested_fatigue):
-        if not all(isinstance(curve.get("after_kj"), int) for curve in source_result):
-            warnings.append("FATIGUE_THRESHOLD_UNAVAILABLE")
+    selection["request_results"] = selector_results
+    if failures or "FATIGUE_SELECTION_MISMATCH" in warnings:
+        selection["verified"] = False
     missing = sorted(
         {duration for curve in data for duration in curve["missing_durations"]}
     )
@@ -663,8 +702,10 @@ async def get_activity_power_curves(
         reasons.append("missing_durations")
     if "SERIES_LENGTH_MISMATCH" in warnings:
         reasons.append("series_length_mismatch")
-    if "FATIGUE_SELECTION_UNVERIFIED" in warnings:
-        reasons.append("fatigue_selection_unverified")
+    if failures:
+        reasons.append("fatigue_variant_unavailable")
+    if "FATIGUE_SELECTION_MISMATCH" in warnings:
+        reasons.append("fatigue_selection_mismatch")
     if "FATIGUE_THRESHOLD_UNAVAILABLE" in warnings:
         reasons.append("fatigue_threshold_unavailable")
     if "BOUNDS_UNAVAILABLE" in warnings:
@@ -675,6 +716,7 @@ async def get_activity_power_curves(
         "curves": data,
         "missing_durations": missing,
         "selection": selection,
+        "selector_results": selector_results,
     }
     if detail == "compact":
         output["full_read"] = full_read
@@ -706,7 +748,7 @@ async def get_activity_power_curves(
         },
         selection=selection,
     )
-    if warnings and data:
+    if warnings:
         response.status = "partial"
     return response
 

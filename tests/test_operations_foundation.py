@@ -125,7 +125,8 @@ def test_journal_reload_session_search_and_account_isolation(tmp_path):
     intent = OperationIntent(operation_uid="op", action="create", session_uid="session", workout=structured())
     journal = OperationJournal("account-a", tmp_path)
     journal.save(intent, result(intent), decision_uid="decision")
-    assert journal.load("op")["schema_version"] == "1.0"
+    record = journal.load("op")
+    assert record is not None and record.schema_version == "1.0"
     assert len(journal.find_by_session("session")) == 1
     assert list(OperationJournal("account-b", tmp_path).iter_records()) == []
     assert journal.load("../../escape") is None
@@ -136,8 +137,9 @@ def test_journal_stores_fingerprint_and_timestamps(tmp_path):
     journal = OperationJournal("account", tmp_path)
     journal.save(intent, result(intent), decision_uid="d")
     record = journal.load("op")
-    assert record["intent_fingerprint"]
-    assert record["created_at"] and record["updated_at"]
+    assert record is not None
+    assert record.intent_fingerprint
+    assert record.created_at and record.updated_at
 
 
 def test_journal_update_preserves_created_at(tmp_path):
@@ -147,8 +149,9 @@ def test_journal_update_preserves_created_at(tmp_path):
     first = journal.load("op")
     journal.save(intent, result(intent, "unknown"), decision_uid="d")
     second = journal.load("op")
-    assert second["created_at"] == first["created_at"]
-    assert second["updated_at"] >= first["updated_at"]
+    assert first is not None and second is not None
+    assert second.created_at == first.created_at
+    assert second.updated_at >= first.updated_at
 
 
 def test_lock_same_directory_context_and_owner_release(tmp_path):

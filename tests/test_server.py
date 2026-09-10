@@ -133,7 +133,7 @@ def test_get_events(monkeypatch):
     Test get_events returns a formatted string containing event details when given a sample event.
     """
     event = {
-        "date": "2024-01-01",
+        "start_date_local": "2024-01-01",
         "id": "e1",
         "name": "Test Event",
         "description": "desc",

@@ -193,9 +193,9 @@ async def test_successful_update_has_fresh_preflight_and_readback(monkeypatch, t
     assert "params" not in put_call
     record = OperationJournal("athlete", tmp_path).load("op-update")
     assert record is not None
-    assert record["result"]["prepared_at"]
-    assert record["result"]["sent_at"]
-    assert record["result"]["completed_at"]
+    assert record.result.prepared_at
+    assert record.result.sent_at
+    assert record.result.completed_at
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 # Agent analytics quality and TATRA V3 acceptance
 
+Latest completion: [Architecture repair (2026-09-10)](#architecture-repair-2026-09-10).
+
 ## Completed local goal (2026-09-09)
 
 Make the public MCP descriptions, schemas and results sufficient for an agent to
@@ -606,3 +608,35 @@ Replay protection requires retaining the operation directory and sharing it acro
 writers for the account. Intervals.icu supplies no documented upstream idempotency
 key for these comments; missing acknowledgement identity cannot be reconstructed
 from matching text. Live verification and deployment were not performed.
+
+## Architecture repair (2026-09-10)
+
+Implemented all three candidates from the 2026-09-10 review. The final design and
+compatibility rules are described in
+[Workout history, activity exports and interval evidence](docs/architecture/journal-artifact-interval-repair.md).
+
+| Area | Implemented behavior |
+| --- | --- |
+| Workout operation journal | One validated record interpretation binds filename, account, intent, result and fingerprints. Inconsistent JSON produces `JOURNAL_CORRUPT` before replay, session lookup, status reconciliation or overwrite. Saving returns an enriched copy; existing version-1 files and historical observations remain compatible. |
+| Reconciliation persistence | A changed/corrupt record or failed local save retains the historical result and upstream observation while returning `unknown`; no retry or publication occurs. Event ID zero retains its identity. |
+| Activity export | The artifact module computes the local snapshot and hash from the single serialization it writes. Export and test setup no longer reproduce its canonicalization. |
+| Activity interval evidence | A shared interpretation owns raw/compact shape, null/missing values, omission metadata and coverage. Source selection and embedded/dedicated fallback remain in session context. |
+
+Verification on the final Python implementation, using synthetic configuration,
+dotenv disabled, and a fresh temporary pytest directory:
+
+- The new corruption regression first failed on the original implementation:
+  replay returned `different-identity` instead of `recorded-op`.
+- Full `pytest`: **540 passed, 1 skipped** in 51.16 s. The native symlink case
+  remains unavailable on this Windows host.
+- `ruff check .`: passed.
+- `mypy src tests`: passed, 79 source files.
+- `git diff --check`: passed.
+- Added 72 journal integrity/preservation cases and 11 interval evidence cases;
+  existing artifact, stdio, coach-cycle and OpenAPI contract checks also pass.
+- Focused independent source review found no remaining regression in the
+  artifact and interval extractions. The journal follow-up findings were fixed
+  and covered by the final suite.
+
+This is local and synthetic verification. **`live_verified=false`**; no live
+Intervals account mutation or live integration verification was performed.

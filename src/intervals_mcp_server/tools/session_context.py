@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import date, timedelta
 import json
 from typing import Any, Literal
+from pydantic import StrictInt
 
 from intervals_mcp_server.contracts import (
     Coverage,
@@ -15,16 +16,23 @@ from intervals_mcp_server.contracts import (
     Source,
     failure,
 )
+from intervals_mcp_server._projection import (
+    COMPACT_TEXT_CHARS as _COMPACT_TEXT_CHARS,
+    copy_projected as _copy_projected,
+    project_record_list as _project_record_list,
+)
+from intervals_mcp_server.intervals import IntervalEvidence, interval_evidence
 from intervals_mcp_server.catalogue import coach_tool
 from intervals_mcp_server.tools.activities import (
     get_activity_details,
     get_activity_intervals,
     get_activity_messages,
+    get_activities,
 )
 from intervals_mcp_server.tools.events import get_event_by_id, get_events
 from intervals_mcp_server.tools.wellness import get_wellness_data
 
-SectionName = Literal["details", "intervals", "plan", "comments", "wellness"]
+SectionName = Literal["details", "intervals", "plan", "comments", "wellness", "activities", "contextual_events"]
 DetailLevel = Literal["compact", "full"]
 
 _SECTION_ORDER: tuple[SectionName, ...] = (
@@ -33,11 +41,11 @@ _SECTION_ORDER: tuple[SectionName, ...] = (
     "plan",
     "comments",
     "wellness",
+    "activities",
+    "contextual_events",
 )
 _DEFAULT_SECTIONS: tuple[SectionName, ...] = ("details", "intervals", "comments")
-_COMPACT_TEXT_CHARS = 4_000
 _COMPACT_COMMENT_RECORDS = 20
-_COMPACT_INTERVAL_RECORDS = 100
 _COMPACT_WELLNESS_RECORDS = 10
 _COMPACT_WORKOUT_STEPS_BYTES = 32_768
 
@@ -99,43 +107,6 @@ _DETAIL_FIELDS: tuple[str, ...] = (
     "kg_lifted",
     "_note",
 )
-_INTERVAL_FIELDS: tuple[str, ...] = (
-    "id",
-    "type",
-    "name",
-    "label",
-    "group_id",
-    "start_index",
-    "end_index",
-    "start_time",
-    "end_time",
-    "moving_time",
-    "elapsed_time",
-    "distance",
-    "average_watts",
-    "weighted_average_watts",
-    "average_watts_kg",
-    "average_heartrate",
-    "min_heartrate",
-    "max_heartrate",
-    "average_cadence",
-    "intensity",
-    "training_load",
-    "joules",
-    "joules_above_ftp",
-    "zone",
-    "zone_min_watts",
-    "zone_max_watts",
-    "wbal_start",
-    "wbal_end",
-    "decoupling",
-    "strain_score",
-    "average_speed",
-    "gap",
-    "total_elevation_gain",
-    "average_gradient",
-)
-_GROUP_FIELDS: tuple[str, ...] = _INTERVAL_FIELDS + ("count", "intervals")
 _COMMENT_FIELDS: tuple[str, ...] = (
     "id",
     "name",
@@ -328,31 +299,6 @@ def _dependent_error(
     return section
 
 
-def _copy_projected(
-    row: dict[str, Any],
-    fields: tuple[str, ...],
-    *,
-    path: str,
-    truncated_text: list[dict[str, Any]],
-) -> tuple[dict[str, Any], set[str]]:
-    projected: dict[str, Any] = {}
-    for field in fields:
-        if field not in row:
-            continue
-        value = deepcopy(row[field])
-        if isinstance(value, str) and len(value) > _COMPACT_TEXT_CHARS:
-            truncated_text.append(
-                {
-                    "path": f"{path}.{field}",
-                    "original_chars": len(value),
-                    "returned_chars": _COMPACT_TEXT_CHARS,
-                }
-            )
-            value = value[:_COMPACT_TEXT_CHARS]
-        projected[field] = value
-    return projected, set(row).difference(fields)
-
-
 def _threshold_values(
     value: dict[str, Any], fields: dict[str, str]
 ) -> dict[str, dict[str, Any]]:
@@ -468,178 +414,29 @@ def _details_section(
     return section
 
 
-def _project_record_list(
-    rows: list[dict[str, Any]],
-    fields: tuple[str, ...],
-    *,
-    limit: int,
-    path: str,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    truncated_text: list[dict[str, Any]] = []
-    omitted_fields: set[str] = set()
-    projected: list[dict[str, Any]] = []
-    for index, row in enumerate(rows[:limit]):
-        item, omitted = _copy_projected(
-            row,
-            fields,
-            path=f"{path}[{index}]",
-            truncated_text=truncated_text,
-        )
-        projected.append(item)
-        omitted_fields.update(omitted)
-    return projected, {
-        "returned_records": len(projected),
-        "omitted_records": max(0, len(rows) - limit),
-        "omitted_fields": sorted(omitted_fields),
-        "truncated_text": truncated_text,
-        "upstream_order_preserved": True,
-        "order_semantics": "unknown",
-    }
-
-
-def _interval_shape_error(value: Any) -> str | None:
-    if isinstance(value, list):
-        if any(not isinstance(row, dict) for row in value):
-            return "flat interval list members must be objects"
-        return None
-    if not isinstance(value, dict):
-        return "interval data must be an object or flat list"
-    if not {"icu_intervals", "icu_groups"}.intersection(value):
-        return "interval data must contain icu_intervals or icu_groups"
-    for key in ("icu_intervals", "icu_groups"):
-        if key == "icu_groups" and value.get(key) is None:
-            continue
-        if key in value and (
-            not isinstance(value[key], list)
-            or any(not isinstance(row, dict) for row in value[key])
-        ):
-            return f"interval field {key} must be an array of objects"
-    return None
-
-
-def _interval_projection(
-    value: Any, activity_id: str
-) -> tuple[Any, dict[str, Any]]:
-    if isinstance(value, list):
-        projected, metadata = _project_record_list(
-            value,
-            _INTERVAL_FIELDS,
-            limit=_COMPACT_INTERVAL_RECORDS,
-            path="intervals",
-        )
-        metadata.update(
-            {
-                "mode": "compact",
-                "record_limit": _COMPACT_INTERVAL_RECORDS,
-                "full_follow_up": {
-                    "tool": "get_activity_intervals",
-                    "parameters": {"activity_id": activity_id},
-                },
-            }
-        )
-        return projected, metadata
-
-    assert isinstance(value, dict)
-    compact: dict[str, Any] = {}
-    aggregate_omitted: set[str] = set(value).difference(
-        {"icu_intervals", "icu_groups"}
-    )
-    omitted_records: dict[str, int | None] = {}
-    returned_records: dict[str, int | None] = {}
-    truncated_text: list[dict[str, Any]] = []
-    for field, fields in (
-        ("icu_intervals", _INTERVAL_FIELDS),
-        ("icu_groups", _GROUP_FIELDS),
-    ):
-        if field not in value:
-            continue
-        rows = value[field]
-        if field == "icu_groups" and rows is None:
-            compact[field] = None
-            omitted_records[field] = None
-            returned_records[field] = None
-            continue
-        assert isinstance(rows, list)
-        projected, metadata = _project_record_list(
-            rows,
-            fields,
-            limit=_COMPACT_INTERVAL_RECORDS,
-            path=f"intervals.{field}",
-        )
-        compact[field] = projected
-        aggregate_omitted.update(metadata["omitted_fields"])
-        omitted_records[field] = metadata["omitted_records"]
-        returned_records[field] = metadata["returned_records"]
-        truncated_text.extend(metadata["truncated_text"])
-    return compact, {
-        "mode": "compact",
-        "record_limit_per_container": _COMPACT_INTERVAL_RECORDS,
-        "returned_records": returned_records,
-        "omitted_records": omitted_records,
-        "omitted_fields": sorted(aggregate_omitted),
-        "truncated_text": truncated_text,
-        "upstream_order_preserved": True,
-        "order_semantics": "unknown",
-        "full_follow_up": {
-            "tool": "get_activity_intervals",
-            "parameters": {"activity_id": activity_id},
-        },
-    }
-
-
 def _finalize_interval_section(
     response: ReadResponse[Any],
-    value: Any,
+    evidence: IntervalEvidence,
     *,
-    detail: DetailLevel,
-    activity_id: str,
     role: str,
     dependencies: dict[str, str],
 ) -> dict[str, Any]:
-    missing = (
-        ["icu_intervals"]
-        if isinstance(value, dict) and "icu_intervals" not in value
-        else []
-    )
     section = _response_section(
         response,
-        data=deepcopy(value),
+        data=evidence.data,
         role=role,
         dependencies=dependencies,
     )
-    if detail == "compact":
-        section["data"], section["projection"] = _interval_projection(
-            value, activity_id
-        )
-        projection = section["projection"]
-        omitted_records = projection.get("omitted_records", 0)
-        records_omitted = (
-            any(omitted_records.values())
-            if isinstance(omitted_records, dict)
-            else bool(omitted_records)
-        )
-        truncated = bool(
-            records_omitted
-            or projection.get("omitted_fields")
-            or projection.get("truncated_text")
-        )
-        section["coverage"]["response_complete"] = not truncated and not missing
-        section["coverage"]["truncated"] = truncated
-        if truncated:
-            section["coverage"]["reasons"] = list(
-                dict.fromkeys(section["coverage"]["reasons"] + ["compact_projection"])
-            )
-    if missing:
+    if evidence.projection is not None:
+        section["projection"] = evidence.projection
+    reasons = section["coverage"]["reasons"] + evidence.coverage["reasons"]
+    section["coverage"].update(evidence.coverage)
+    section["coverage"]["reasons"] = list(dict.fromkeys(reasons))
+    if evidence.missing:
         section["status"] = "partial"
         section["availability"] = "partial"
-        section["missing"] = missing
-        section["warnings"] = list(
-            dict.fromkeys(section["warnings"] + ["ICU_INTERVALS_MISSING"])
-        )
-        section["coverage"]["response_complete"] = False
-        section["coverage"]["reasons"] = list(
-            dict.fromkeys(section["coverage"]["reasons"] + ["icu_intervals_missing"])
-        )
+        section["missing"] = evidence.missing
+        section["warnings"] = list(dict.fromkeys(section["warnings"] + evidence.warnings))
     return section
 
 
@@ -657,11 +454,12 @@ async def _intervals_section(
             for field in ("icu_intervals", "icu_groups")
             if field in activity
         }
-        shape_error = _interval_shape_error(embedded)
-        if shape_error:
+        try:
+            evidence = interval_evidence(embedded, activity_id=activity_id, detail=detail)
+        except ValueError as exc:
             return _composition_error(
                 code="INVALID_UPSTREAM_RESPONSE",
-                message=shape_error,
+                message=str(exc),
                 data=[],
                 provenance=[_provenance(activity_response, "activity_with_intervals")],
                 dependencies={"activity_with_intervals": activity_response.status},
@@ -670,9 +468,7 @@ async def _intervals_section(
             )
         return _finalize_interval_section(
             activity_response,
-            embedded,
-            detail=detail,
-            activity_id=activity_id,
+            evidence,
             role="activity_with_intervals",
             dependencies={"activity_with_intervals": activity_response.status},
         )
@@ -680,13 +476,12 @@ async def _intervals_section(
     embedded_groups: list[dict[str, Any]] | None = None
     if "icu_groups" in activity:
         groups = activity["icu_groups"]
-        if groups is not None and (
-            not isinstance(groups, list)
-            or any(not isinstance(row, dict) for row in groups)
-        ):
+        try:
+            interval_evidence({"icu_groups": groups}, activity_id=activity_id)
+        except ValueError as exc:
             return _composition_error(
                 code="INVALID_UPSTREAM_RESPONSE",
-                message="embedded interval field icu_groups must be an array of objects",
+                message=str(exc),
                 data=[],
                 provenance=[_provenance(activity_response, "activity_with_intervals")],
                 dependencies={"activity_with_intervals": activity_response.status},
@@ -701,11 +496,12 @@ async def _intervals_section(
         "dedicated_intervals": dedicated.status,
     }
     if dedicated.status != "error":
-        shape_error = _interval_shape_error(dedicated.data)
-        if shape_error:
+        try:
+            evidence = interval_evidence(dedicated.data, activity_id=activity_id, detail=detail)
+        except ValueError as exc:
             return _composition_error(
                 code="INVALID_UPSTREAM_RESPONSE",
-                message=shape_error,
+                message=str(exc),
                 data={"icu_groups": embedded_groups} if embedded_groups is not None else [],
                 provenance=[
                     _provenance(activity_response, "activity_with_intervals"),
@@ -716,9 +512,7 @@ async def _intervals_section(
             )
         return _finalize_interval_section(
             dedicated,
-            dedicated.data,
-            detail=detail,
-            activity_id=activity_id,
+            evidence,
             role="dedicated_intervals",
             dependencies=dependencies,
         )
@@ -727,9 +521,7 @@ async def _intervals_section(
         value = {"icu_groups": embedded_groups}
         section = _finalize_interval_section(
             activity_response,
-            value,
-            detail=detail,
-            activity_id=activity_id,
+            interval_evidence(value, activity_id=activity_id, detail=detail),
             role="activity_with_intervals",
             dependencies=dependencies,
         )
@@ -1144,6 +936,16 @@ async def _plan_section(
 ) -> dict[str, Any]:
     paired_id, pair_error = _paired_event_id(activity)
     activity_provenance = [_provenance(activity_response, "activity_pairing")]
+    if pair_error == "PAIRED_EVENT_NULL":
+        return {
+            "status": "ok", "availability": "unpaired",
+            "data": {"paired_event_id": None, "raw_event": None, "resolved_event": None},
+            "provenance": activity_provenance,
+            "dependencies": {"activity": activity_response.status, "paired_event": "unpaired"},
+            "coverage": Coverage(source_complete_within_query=None,
+                                 reasons=["explicitly_unpaired"]).model_dump(),
+            "warnings": [], "error": None,
+        }
     if pair_error:
         messages = {
             "PAIRED_EVENT_MISSING": "activity has no paired_event_id field",
@@ -1251,6 +1053,7 @@ async def _plan_section(
         end_date_exclusive=next_day,
         timezone=timezone,
         resolve=True,
+        include_overlapping=False,
     )
     provenance.append(_provenance(resolved_response, "paired_event_resolved_day"))
     dependencies["paired_event_date"] = "ok"
@@ -1358,10 +1161,11 @@ def _wellness_section(
                 "tool": "get_wellness_data",
                 "parameters": {
                     "athlete_id": athlete_id,
-                    "start_date": activity_day,
-                    "end_date_exclusive": (
+                    "start_date": response.query.model_dump().get("start_date", activity_day),
+                    "timezone": response.query.model_dump().get("timezone", "Europe/Warsaw"),
+                    "end_date_exclusive": response.query.model_dump().get("end_date_exclusive", (
                         date.fromisoformat(activity_day) + timedelta(days=1)
-                    ).isoformat(),
+                    ).isoformat()),
                 },
             },
         }
@@ -1384,6 +1188,44 @@ def _wellness_section(
         section["coverage"]["reasons"] = list(
             dict.fromkeys(section["coverage"]["reasons"] + ["compact_projection"])
         )
+    return section
+
+
+def _context_list_section(
+    response: ReadResponse[Any], *, kind: str, detail: DetailLevel,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    fields = (
+        ("id", "name", "type", "start_date_local", "moving_time", "elapsed_time", "distance",
+         "total_elevation_gain", "icu_training_load", "power_load", "hr_load", "strain_score",
+         "icu_rpe", "feel", "paired_event_id", "source", "tags")
+        if kind == "activities" else
+        ("id", "name", "category", "type", "start_date_local", "end_date_local",
+         "description", "training_availability", "paired_activity_id", "icu_training_load")
+    )
+    data = deepcopy(response.data)
+    projection = None
+    if response.status != "error" and detail == "compact":
+        data, projection = _project_record_list(data, fields, limit=20, path=kind)
+    section = _response_section(response, data=data, role=kind)
+    section["pagination"] = response.pagination.model_dump()
+    tool = "get_activities" if kind == "activities" else "get_events"
+    section["full_read"] = {"tool": tool, "parameters": parameters}
+    if response.pagination.next_cursor:
+        section["next_read"] = {"tool": tool,
+                                "parameters": {**parameters, "cursor": response.pagination.next_cursor}}
+    if projection is not None:
+        section["projection"] = projection
+        omitted = bool(projection["omitted_records"] or projection["omitted_fields"]
+                       or projection["truncated_text"])
+        if omitted:
+            section["coverage"]["response_complete"] = False
+            section["coverage"]["truncated"] = True
+            section["coverage"]["reasons"].append("compact_projection")
+    if kind == "contextual_events":
+        section["pairing_semantics"] = "Calendar context only; shared dates do not establish a workout link."
+        if response.model_extra and "overlap" in response.model_extra:
+            section["overlap"] = deepcopy(response.model_extra["overlap"])
     return section
 
 
@@ -1463,7 +1305,7 @@ def _aggregate_response(
     )
 
 
-@coach_tool(access="read", upstream="read", local="none")
+@coach_tool(access="read", upstream="read", local="memory")
 async def get_session_context(
     activity_id: str,
     sections: list[SectionName] | None = None,
@@ -1471,6 +1313,8 @@ async def get_session_context(
     athlete_id: str | None = None,
     timezone: str = "Europe/Warsaw",
     api_key: str | None = None,
+    context_days_before: StrictInt = 0,
+    context_days_after: StrictInt = 0,
 ) -> ReadResponse[Any]:
     """Return bounded, section-aware context for one completed activity.
 
@@ -1492,6 +1336,11 @@ async def get_session_context(
     Each requested section reports its own status, availability, provenance,
     dependencies, coverage, warnings, and error. A valid empty section remains
     a successful fact, and successful sections survive failures elsewhere.
+    An explicitly null paired_event_id is a successful unpaired fact. Optional
+    activities and contextual_events sections use the same local-date window as
+    wellness; context_days_before/after each accept 0..31 days (default zero).
+    Activities are paged at 20 records with an exact raw continuation. Events
+    provide context only and never imply pairing. Defaults fetch no extra history.
     """
     if not isinstance(activity_id, str) or not activity_id.strip():
         return _local_failure(
@@ -1508,6 +1357,10 @@ async def get_session_context(
             phase="validation",
             query={"activity_id": activity_id},
         )
+    if any(isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 31
+           for value in (context_days_before, context_days_after)):
+        return _local_failure(resource="session_context", code="INVALID_CONTEXT_WINDOW",
+                              message="context days must be integers in 0..31", phase="validation")
     requested_raw: list[Any] = list(_DEFAULT_SECTIONS if sections is None else sections)
     if not requested_raw:
         return _local_failure(
@@ -1532,7 +1385,7 @@ async def get_session_context(
         )
     requested = [section for section in _SECTION_ORDER if section in requested_raw]
 
-    activity_sections = {"details", "intervals", "plan", "wellness"}
+    activity_sections = {"details", "intervals", "plan", "wellness", "activities", "contextual_events"}
     needs_activity = any(section in activity_sections for section in requested)
     activity_response: ReadResponse[Any] | None = None
     activity: dict[str, Any] | None = None
@@ -1590,41 +1443,52 @@ async def get_session_context(
             comments_response, activity_id, detail
         )
 
-    if "wellness" in requested:
+    for context_section in ("wellness", "activities", "contextual_events"):
+        if context_section not in requested:
+            continue
         assert activity_response is not None
         if activity is None:
-            composed["wellness"] = _dependent_error(activity_response, "wellness")
+            composed[context_section] = _dependent_error(activity_response, context_section)
         else:
             activity_day = _activity_date(activity)
+            window_start, window_end = None, None
+            if activity_day is not None:
+                try:
+                    window_start = (date.fromisoformat(activity_day) - timedelta(days=context_days_before)).isoformat()
+                    window_end = (date.fromisoformat(activity_day) + timedelta(days=context_days_after + 1)).isoformat()
+                except (ValueError, OverflowError):
+                    activity_day = None
             if activity_day is None:
-                composed["wellness"] = _composition_error(
+                composed[context_section] = _composition_error(
                     code="ACTIVITY_DATE_INVALID",
-                    message="activity has no valid start_date_local date for wellness",
+                    message="activity has no valid local date for the requested context window",
                     data=[],
                     provenance=[_provenance(activity_response, "activity_date")],
                     dependencies={"activity": activity_response.status, "activity_date": "error"},
                     status="error",
-                    recommended_action="inspect activity details and request wellness by an explicit date",
+                    recommended_action="inspect activity details and request context by an explicit date",
                 )
             else:
-                wellness_response = await get_wellness_data(
-                    athlete_id=athlete_id,
-                    api_key=api_key,
-                    start_date=activity_day,
-                    end_date_exclusive=(
-                        date.fromisoformat(activity_day) + timedelta(days=1)
-                    ).isoformat(),
-                    timezone=timezone,
-                )
-                composed["wellness"] = _wellness_section(
-                    wellness_response,
-                    detail=detail,
-                    activity_id=activity_id,
-                    activity_day=activity_day,
-                    athlete_id=athlete_id,
-                )
+                parameters: dict[str, Any] = {"athlete_id": athlete_id, "start_date": window_start,
+                              "end_date_exclusive": window_end, "timezone": timezone}
+                if context_section == "wellness":
+                    wellness_response = await get_wellness_data(api_key=api_key, **parameters)
+                    composed["wellness"] = _wellness_section(
+                        wellness_response, detail=detail, activity_id=activity_id,
+                        activity_day=activity_day, athlete_id=athlete_id,
+                    )
+                else:
+                    if context_section == "activities":
+                        context_response = await get_activities(api_key=api_key, page_size=20, **parameters)
+                        parameters["page_size"] = 20
+                    else:
+                        parameters["include_overlapping"] = True
+                        context_response = await get_events(api_key=api_key, **parameters)
+                    composed[context_section] = _context_list_section(
+                        context_response, kind=context_section, detail=detail, parameters=parameters,
+                    )
 
-    return _aggregate_response(
+    response = _aggregate_response(
         activity_id=activity_id,
         requested=requested,
         detail=detail,
@@ -1632,6 +1496,10 @@ async def get_session_context(
         timezone=timezone,
         sections=composed,
     )
+    response.query = Query.model_validate({**response.query.model_dump(),
+                                         "context_days_before": context_days_before,
+                                         "context_days_after": context_days_after})
+    return response
 
 
 __all__ = ["get_session_context"]

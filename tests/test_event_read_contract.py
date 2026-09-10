@@ -6,9 +6,10 @@ def test_event_half_open_and_duplicates(monkeypatch):
     seen = []
     async def fake(**kwargs):
         seen.append(kwargs)
-        return [{"id": "a", "date": "2026-09-08", "zero": 0, "value": None}, {"id": "a", "date": "2026-09-08"}]
+        return [{"id": "a", "start_date_local": "2026-09-08", "zero": 0, "value": None},
+                {"id": "a", "start_date_local": "2026-09-08"}]
     monkeypatch.setattr("intervals_mcp_server.tools.events.make_intervals_request", fake)
-    result = asyncio.run(get_events(athlete_id="a", end_date="2026-09-08"))
+    result = asyncio.run(get_events(athlete_id="a", start_date="2026-09-08", end_date="2026-09-08"))
     assert result.status == "ok" and result.query.upstream_newest == "2026-09-08"
     assert seen[0]["params"]["newest"] == "2026-09-08" and len(result.data) == 2
 
@@ -55,7 +56,7 @@ def test_event_list_sends_resolve_only_when_requested(monkeypatch):
             "url": "/athlete/a/events",
             "api_key": None,
             "params": {
-                "oldest": "2026-09-08",
+                "oldest": "0001-01-01",
                 "newest": "2026-09-08",
                 "resolve": True,
             },

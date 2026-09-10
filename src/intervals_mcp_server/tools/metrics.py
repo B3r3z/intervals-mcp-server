@@ -20,6 +20,10 @@ from intervals_mcp_server.contracts import (
     Source,
 )
 from intervals_mcp_server.catalogue import coach_tool
+from intervals_mcp_server.respiratory import (
+    RESPIRATORY_METRICS, TYMEWEAR_LIMITATIONS, TYMEWEAR_LINKS,
+    TYMEWEAR_REVIEW_NOTE, respiratory_guidance,
+)
 
 
 _LINK_STREAMS = "https://forum.intervals.icu/t/api-access-to-intervals-icu/609?page=7"
@@ -400,6 +404,63 @@ _CATALOGUE: tuple[dict[str, Any], ...] = (
     ),
 )
 
+_CATALOGUE += tuple(
+    _definition(
+        name, label=label, unit=unit, axis=axis, origin="upstream_reported",
+        calculation=description, limitations=[limitation], primary_tools=tools,
+        primary_links=("https://intervals.icu/api/v1/docs",), aliases=aliases,
+    )
+    for name, label, unit, axis, description, limitation, tools, aliases in (
+        ("icu_intensity", "Upstream intensity", "%", "activity",
+         "Upstream percentage intensity, interpreted with sport and calculation source.",
+         "Not a unitless IF; the same interpretation is not assumed across sports.",
+         ["get_activity_details"], ()),
+        ("decoupling", "Power-HR decoupling", "%", "activity_or_interval",
+         "Upstream change in the power-HR relationship over the selected analysis windows.",
+         "Retain window and HR-lag context; no causal interpretation or universal cutoff.",
+         ["get_activity_details", "get_activity_power_hr", "get_activity_interval_stats"], ()),
+        ("icu_rpe", "Reported perceived exertion", "score", "activity",
+         "Source-reported subjective effort; original numeric value is preserved.",
+         "No scale conversion, inferred value or mapping from session_rpe.",
+         ["get_activity_details"], ()),
+        ("feel", "Reported session feeling", "code", "activity",
+         "Source-reported subjective feeling code; original value is preserved.",
+         "No label or scale mapping is inferred from the numeric code.",
+         ["get_activity_details"], ()),
+        ("icu_zone_times", "Power zone durations", "s", "activity",
+         "Source durations by power-zone identifier.",
+         "Additional overlapping categories must not be added again to disjoint zone totals.",
+         ["get_activity_details"], ()),
+        ("temp", "Native temperature", "C", "sample_index",
+         "Native recorded temperature stream in degrees Celsius.",
+         "Recorded device temperature is not automatically weather or body temperature.",
+         ["get_activity_streams"], ("temperature",)),
+        ("torque", "Native torque", "N m", "sample_index",
+         "Native upstream torque observations.",
+         "Device or upstream derivation must be established separately.",
+         ["get_activity_streams"], ()),
+        ("activity_hrv", "Activity HRV stream with unknown semantics", "unknown", "sample_index",
+         "Activity stream named hrv; preserve values without assigning a wellness metric.",
+         "Not interchangeable with daily Wellness.hrv rMSSD; no device-method inference.",
+         ["get_activity_streams", "get_activity_data_quality"], ("streams.hrv",)),
+    )
+)
+
+for _respiratory_metric in RESPIRATORY_METRICS:
+    _entry = _definition(
+        _respiratory_metric["name"], label=_respiratory_metric["label"],
+        unit=_respiratory_metric["unit"], axis="sample_index_or_interval_or_activity",
+        origin="upstream_reported", calculation=_respiratory_metric["description"],
+        limitations=list(TYMEWEAR_LIMITATIONS),
+        primary_tools=["get_activity_streams", "get_activity_intervals",
+                       "get_activity_interval_stats", "get_activity_data_quality",
+                       "get_custom_items"],
+        primary_links=TYMEWEAR_LINKS, aliases=_respiratory_metric["aliases"],
+    )
+    _entry["link_note"] = TYMEWEAR_REVIEW_NOTE
+    _entry["device_context"] = respiratory_guidance([_respiratory_metric["name"]])
+    _CATALOGUE += (_entry,)
+
 _BY_SELECTOR: dict[str, dict[str, Any]] = {}
 _EXPLICIT_LINKS = {
     "sample_index": (_LINK_MODEL, _LINK_STREAMS),
@@ -499,6 +560,12 @@ async def get_metric_definitions(
     reported/calculated/estimated status, and limitations are descriptive only.
     No account data is fetched, no training calculation is performed, and
     unknown selectors remain explicit in ``unknown_names``.
+
+    Includes VT/tidal_volume, VE/tidal_volume_min and BR/respiration with
+    Tymewear FIT mappings and device-unit context. Tymewear volume is relative,
+    not calibrated liters; do not divide raw VT by 100 or 1000. VT is volume
+    per breath, distinct from thresholds VT1/VT2. Custom names/units require
+    source verification; this catalogue does not identify a recording's device.
     """
     selected_names, error = _selector_values(names, "names")
     if error:

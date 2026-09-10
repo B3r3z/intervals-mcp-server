@@ -25,6 +25,7 @@ SELECTED_OPERATIONS: tuple[tuple[str, str, str], ...] = (
     ("GET", "/api/v1/activity/{id}/intervals", "getIntervals"),
     ("GET", "/api/v1/activity/{id}/interval-stats", "getIntervalStats"),
     ("GET", "/api/v1/activity/{id}/best-efforts", "findBestEfforts"),
+    ("GET", "/api/v1/activity/{id}/power-vs-hr{ext}", "getPowerVsHR"),
     ("GET", "/api/v1/activity/{id}/messages", "listActivityMessages"),
     ("POST", "/api/v1/activity/{id}/messages", "sendActivityMessage"),
     ("GET", "/api/v1/activity/{id}/streams{ext}", "getActivityStreams"),
@@ -46,7 +47,7 @@ SELECTED_OPERATIONS: tuple[tuple[str, str, str], ...] = (
 )
 
 REQUEST_SCHEMAS: tuple[str, ...] = ("CustomItem", "EventEx", "NewActivityMsg")
-RESPONSE_SCHEMAS: tuple[str, ...] = ("Message", "NewMsg")
+RESPONSE_SCHEMAS: tuple[str, ...] = ("Message", "NewMsg", "PowerVsHRPlot", "Bucket", "Curve")
 SECURITY_SCHEMES: tuple[str, ...] = ("APIKey", "AccessToken")
 
 EXCEPTIONS: tuple[dict[str, Any], ...] = (
@@ -255,11 +256,11 @@ def project_spec(document: dict[str, Any], source_sha256: str) -> dict[str, Any]
                 document, path_item, operation, operation_key
             ),
         }
-        if path == "/api/v1/activity/{id}/messages":
+        if path in {"/api/v1/activity/{id}/messages", "/api/v1/activity/{id}/power-vs-hr{ext}"}:
             projected["optional_parameters"] = _project_parameters(
                 document, path_item, operation, operation_key, required=False
             )
-            # Only these response shapes establish evidence for verified publication.
+            # Preserve the response contracts for publication evidence and native power-HR.
             responses = _as_object(operation.get("responses"), f"{operation_key} responses")
             projected["responses"] = {"200": deepcopy(responses.get("200"))}
         request_schema = _request_schema_name(document, operation, operation_key)

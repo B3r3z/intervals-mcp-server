@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import json
+from copy import deepcopy
 from typing import Any
 
 from pydantic import StrictBool, StrictFloat, StrictInt
@@ -16,6 +18,7 @@ from intervals_mcp_server.contracts import (
     upstream_failure,
 )
 from intervals_mcp_server.catalogue import coach_tool
+from intervals_mcp_server.respiratory import respiratory_guidance
 
 
 _INTERVAL_MARKER_FIELDS = {
@@ -125,11 +128,14 @@ def _is_strict_int(value: Any) -> bool:
 
 
 def _is_finite_number(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+    try:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        )
+    except OverflowError:
+        return False
 
 
 def _validate_bounds(
@@ -235,6 +241,12 @@ async def get_activity_interval_stats(
     performs no numeric calculations.  A returned range mismatch is explicit
     partial data; use the suggested ``get_activity_streams`` time range to map
     sample indices to elapsed time.  Source completeness is unknown.
+
+    average_tidal_volume is VT (volume per breath, not VT1/VT2),
+    average_tidal_volume_min is VE, and average_respiration is BR. Tymewear
+    volumes use relative device units, not calibrated liters; no /100 or
+    /1000 conversion is applied. Conditional field documentation is returned
+    in provenance.respiratory_interpretation; see get_metric_definitions.
     """
     resource = "activity_interval_stats"
     if not isinstance(activity_id, str) or not activity_id.strip():
@@ -329,6 +341,10 @@ async def get_activity_interval_stats(
         warnings.append("RETURNED_BOUNDS_MISMATCH")
         reasons.append("RETURNED_BOUNDS_MISMATCH")
 
+    provenance = _provenance()
+    respiratory_interpretation = respiratory_guidance(result)
+    if respiratory_interpretation:
+        provenance["respiratory_interpretation"] = respiratory_interpretation
     response = success(
         dict(result),
         resource=resource,
@@ -341,7 +357,7 @@ async def get_activity_interval_stats(
         },
         warnings=warnings,
         units=_interval_units(),
-        provenance=_provenance(),
+        provenance=provenance,
         bounds={
             "requested": {"start_index": start_index, "end_index": end_index},
             "returned": returned_bounds,
@@ -648,4 +664,99 @@ async def get_activity_best_efforts(
     return response
 
 
-__all__ = ["get_activity_interval_stats", "get_activity_best_efforts"]
+@coach_tool(access="read", upstream="read", local="none")
+async def get_activity_power_hr(
+    activity_id: str, detail: str = "compact", api_key: str | None = None,
+) -> ReadResponse[Any]:
+    """Read native power-versus-HR analysis, including upstream HR lag and windows.
+
+    Values, coefficients and selection indices are source-provided. No new
+    physiological calculations or causal conclusions are made. Compact detail
+    keeps the first 120 series rows and eight curves, then omits whole fields
+    if needed to bound data to 32 KiB. Exact omissions and a full continuation
+    are returned. Full detail preserves the complete JSON object.
+    """
+    resource = "activity_power_hr"
+    query = {"activity_id": activity_id, "detail": detail}
+    if not isinstance(activity_id, str) or not activity_id.strip():
+        return failure(resource=resource, code="INVALID_ACTIVITY_ID",
+                       message="activity_id is required", phase="validation")
+    if detail not in {"compact", "full"}:
+        return failure(resource=resource, code="INVALID_DETAIL",
+                       message="detail must be compact or full", phase="validation")
+    raw = await make_intervals_request(url=f"/activity/{activity_id}/power-vs-hr.json", api_key=api_key)
+    failed = upstream_failure(raw, resource=resource, query=query)
+    if failed is not None:
+        return failed
+    if not isinstance(raw, dict):
+        return invalid_upstream_response(resource=resource, message="power-HR response must be an object", query=query)
+    numeric = {"bucketSize", "warmup", "cooldown", "elapsedTime", "hrLag", "powerHr",
+               "powerHrFirst", "powerHrSecond", "decoupling", "powerHrZ2", "medianCadenceZ2",
+               "avgCadenceZ2", "hrZ2BucketCount", "start", "mid", "end"}
+    if raw and not (numeric | {"series", "curves", "ratioCoefficients"}).intersection(raw):
+        return invalid_upstream_response(resource=resource, message="power-HR object has no recognized fields", query=query)
+    for key in numeric:
+        if key in raw and raw[key] is not None and not _is_finite_number(raw[key]):
+            return invalid_upstream_response(resource=resource, message=f"{key} must be finite numeric or null", query=query)
+    ratios = raw.get("ratioCoefficients")
+    if ratios is not None and (
+        not isinstance(ratios, list)
+        or any(value is not None and not _is_finite_number(value) for value in ratios)
+    ):
+        return invalid_upstream_response(resource=resource, message="ratioCoefficients must be numeric or null", query=query)
+    for key, numeric_fields in (
+        ("series", {"start", "secs", "movingSecs", "watts", "hr", "cadence"}),
+        ("curves", {"r2"}),
+    ):
+        rows = raw.get(key)
+        if rows is None:
+            continue
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            return invalid_upstream_response(resource=resource, message=f"{key} must be an object array or null", query=query)
+        for row in rows:
+            if any(field in row and row[field] is not None and not _is_finite_number(row[field])
+                   for field in numeric_fields):
+                return invalid_upstream_response(resource=resource, message=f"{key} contains invalid numeric observations", query=query)
+            coefficients = row.get("coefficients")
+            if coefficients is not None and (
+                not isinstance(coefficients, list)
+                or any(value is not None and not _is_finite_number(value) for value in coefficients)
+            ):
+                return invalid_upstream_response(resource=resource, message="curve coefficients must be numeric or null", query=query)
+    data = deepcopy(raw)
+    omitted_records: dict[str, int] = {}
+    omitted_fields: list[str] = []
+    if detail == "compact":
+        for key, limit in (("series", 120), ("curves", 8)):
+            if isinstance(data.get(key), list) and len(data[key]) > limit:
+                omitted_records[key] = len(data[key]) - limit
+                data[key] = data[key][:limit]
+        for key in sorted(data, key=lambda field: len(json.dumps(data[field], ensure_ascii=False)), reverse=True):
+            if len(json.dumps(data, ensure_ascii=False).encode("utf-8")) <= 32768:
+                break
+            omitted_fields.append(key)
+            del data[key]
+    truncated = bool(omitted_records or omitted_fields)
+    response = success(
+        data, resource=resource, query=query,
+        coverage={"source_complete_within_query": None, "response_complete": not truncated,
+                  "truncated": truncated, "reasons": ["upstream_completeness_unverified"]
+                  + (["compact_projection"] if truncated else [])},
+        provenance={"origin": "upstream intervals.icu", "mcp_numeric_calculations": []},
+        units={"bucketSize": "s", "warmup": "s", "cooldown": "s", "elapsedTime": "s",
+               "hrLag": "s", "series.start": "s", "series.secs": "s",
+               "series.movingSecs": "s", "series.watts": "W", "series.hr": "bpm",
+               "series.cadence": "1/min", "start": "series_index", "mid": "series_index",
+               "end": "series_index", "decoupling": "%"},
+        availability="available" if raw else "empty",
+        projection={"detail": detail, "omitted_records": omitted_records,
+                    "omitted_fields": omitted_fields, "series_order": "upstream order; no resampling",
+                    "full_read": {"tool": "get_activity_power_hr",
+                                  "parameters": {"activity_id": activity_id, "detail": "full"}}},
+    )
+    if truncated:
+        response.status = "partial"
+    return response
+
+
+__all__ = ["get_activity_interval_stats", "get_activity_best_efforts", "get_activity_power_hr"]

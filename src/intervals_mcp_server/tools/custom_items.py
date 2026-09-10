@@ -196,6 +196,13 @@ def _compact_custom_item(
         compact["description_preview"] = description[:_COMPACT_TEXT_LIMIT]
     compact["omitted_fields"] = sorted(set(omitted_fields))
     compact["omitted_text_fields"] = omitted_text_fields
+    content = item.get("content")
+    if isinstance(content, dict):
+        compact["content_metadata"] = {
+            key: deepcopy(content[key])
+            for key in ("code", "fit_record_field", "unit", "units", "type")
+            if key in content
+        }
     declared_metadata, missing_metadata = _declared_custom_metadata(item)
     if declared_metadata or missing_metadata:
         compact["declared_metadata"] = declared_metadata

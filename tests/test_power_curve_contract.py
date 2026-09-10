@@ -137,7 +137,7 @@ def test_activity_power_curves_compact_preserves_alignment_and_selection(
     )
 
     assert captured["url"] == "/activity/activity/power-curves"
-    assert captured["params"] == {"types": "watts", "fatigue": "normal,kj0"}
+    assert captured["params"] == {"types": "watts", "fatigue": "kj0"}
     curve = result.data["curves"][0]
     assert curve["data_points"] == [
         {

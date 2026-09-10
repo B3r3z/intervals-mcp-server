@@ -252,16 +252,18 @@ Once the server is running and Claude Desktop is configured, you can use the fol
 - `get_activities`: Retrieve a list of activities
 - `get_activity_details`: Get detailed information for a specific activity
 - `get_activity_intervals`: Get detailed interval data for a specific activity
-- `get_session_context`: Compose requested details, intervals, plan, comments, and wellness sections with explicit compact limits, provenance, and full-read follow-ups.
+- `get_session_context`: Compose requested session sections and optional wellness, activity-history and calendar context with explicit limits, provenance, and full-read follow-ups.
 - `get_activity_streams`: Get compact stream previews by default; pass inclusive `start_index` and exclusive `end_index` together for exact full samples in a JSON range.
 - `get_athlete_power_curves`: Get best power output curves for selected durations and time periods
 - `get_activity_power_curves`: Read an activity's upstream watts curves; durations are seconds, curve indices are sample indices, and `detail="full"` preserves large raw arrays.
 - `get_activity_interval_stats`: Read raw interval statistics for a half-open sample-index range; use the time stream to map indices to seconds.
 - `get_activity_best_efforts`: Find upstream efforts by one duration-in-seconds or distance-in-metres selector without MCP FTP or VO2 calculations.
+- `get_activity_data_quality`: Inspect every returned stream sample for numeric validity, alignment and time gaps, with independent recording metadata and feedback availability.
+- `get_activity_power_hr`: Read native power-versus-HR analysis, including windows, lag and coefficients; compact output has an exact full-read continuation.
 - `get_sport_settings`: Read current-at-fetch sport settings or a settings ID; FTP/power are W, W' is J, fatigue thresholds are kJ, heart rate is bpm, and threshold pace is m/s regardless of display pace units.
 - `get_metric_definitions`: Read the local curated metric catalogue before interpreting streams, intervals, wellness, or custom definitions; unknown selectors remain explicit and no account data is fetched.
 - `get_wellness_data`: Fetch wellness data
-- `get_events`: Retrieve upcoming events (workouts, races, etc.)
+- `get_events`: Retrieve events overlapping a date range, including ongoing holidays, workouts and races
 - `get_event_by_id`: Get detailed information for a specific event
 - `add_or_update_event`: Create or update an event (workout, race, note, etc.)
 - `delete_event`: Delete a specific event
@@ -507,6 +509,27 @@ call and rejects a larger range before requesting Intervals.icu. Use
 `export_activity_data` and `get_artifact_chunk` for a larger complete transfer;
 the range endpoint never silently trims the requested range.
 
+Missing or null `data2` is optional for scalar streams. A present secondary array
+still participates in alignment. `get_activity_data_quality(activity_id)` reads
+all upstream streams and activity metadata independently, returning counts for
+finite, null, invalid and zero samples, plus bounded time-gap examples. Gaps use
+a one-second reference; duplicate, reversed and fractional time steps remain
+explicit. Recording stops are separate upstream facts. No gap filling, sensor
+diagnosis or readiness score is produced.
+
+`get_activity_power_curves` requests each distinct fatigue selector separately.
+`selector_results` retains each outcome when another variant fails. Missing
+selector echoes remain unverified metadata; they alone do not make complete
+power points partial. HTTP 422 directs the caller to inspect sport settings and
+parameters without assuming its cause.
+
+`get_activity_power_hr(activity_id)` preserves native Intervals.icu power-HR
+results without recalculation. Compact mode retains at most 120 series rows and
+eight curves, then omits whole fields if necessary to keep data within 32 KiB.
+Omissions and `projection.full_read` are explicit; `detail="full"` preserves the
+complete upstream JSON object. The returned analysis windows and HR lag must be
+considered when interpreting its metrics.
+
 Use `get_metric_definitions` as the local interpretation guide: it distinguishes
 sample indices from seconds, elapsed from moving time, processed from raw watts
 and heart rate, W/kg from Normalized Power, and upstream reported, calculated,
@@ -517,6 +540,22 @@ non-monotonic time values remain source data. Custom-item reads treat scripts an
 descriptions as untrusted data: compact responses list omissions and provide a
 full continuation, while full responses preserve parsed upstream fields and put
 derived metadata warnings outside the raw item.
+Compact custom items also expose declared `code`, `fit_record_field`, `type`
+and units from content, without executing scripts. Activity `streams.hrv` has
+unknown semantics and remains distinct from daily wellness HRV.
+
+For respiratory data, `get_metric_definitions(names=["VT", "VE", "BR"])`
+explains native fields, their interval averages and Tymewear FIT mappings.
+`tidal_volume` is volume per breath; `tidal_volume_min` is minute ventilation;
+`respiration` is breaths/min. When sourced from Tymewear, VT uses relative
+`i.u.` and VE relative `vol/min`, with no supported universal conversion to
+liters. VT is distinct from ventilatory thresholds VT1/VT2. Stream, interval-stat
+and data-quality responses include conditional documentation under
+`provenance.respiratory_interpretation`; samples and upstream unit declarations
+remain unchanged. Device origin is not inferred from native names, and custom
+`L/br` or `L/min` labels do not establish calibration. See the
+[Tymewear documentation research](docs/research/2026-09-10-tymewear-tidal-volume.md)
+for primary sources and the withdrawn `/100` conversion.
 
 `get_session_context` fetches only requested sections. The default is activity
 details with embedded intervals plus comments; a comments-only request does not
@@ -531,6 +570,32 @@ the event's own date, then selects exactly one same-ID row from the day's
 is the current stored version. Activity-assigned thresholds, stored event or
 workout thresholds, and current sport settings remain distinct; this tool does
 not fetch or substitute current settings.
+
+An explicitly null `paired_event_id` is a successful `unpaired` fact. Optional
+`activities`, `contextual_events` and `wellness` sections share a local-date
+window controlled by `context_days_before` and `context_days_after` (0..31 each;
+defaults are zero). For example, request seven days before and two days after
+to inspect recovery context. Activities return 20 records per snapshot page;
+compact events retain 20 records. Exact raw continuations retain the date
+window, timezone and pagination cursor where applicable. Contextual calendar
+events never establish a workout pairing.
+
+`get_events` includes events that started before the requested window and are
+still ongoing. The API selects event starts, so the default
+`include_overlapping=true` fetches candidates from `0001-01-01` through the
+requested end, without an upstream limit or category filter, then applies local
+overlap selection. This avoids a fixed lookback missing a long holiday, but can
+fetch more historical records than it returns. `end_date_local` is exclusive;
+an event ending at midnight on September 21 does not overlap September 21.
+Responses retain the requested window, expose `query.upstream_oldest` and
+`overlap` selection counts, and preserve selected source records unchanged.
+Missing or invalid boundaries that prevent deciding overlap retain unresolved
+candidates with `partial` status and `EVENT_OVERLAP_UNRESOLVED`; unknown fields
+such as `date` do not replace `start_date_local`. Source completeness remains
+unverified. `get_session_context` uses the same selection for contextual events.
+Explicit `include_overlapping=false` retains the API's original start-date
+selection and is used internally to resolve an already identified paired event
+on its exact start day.
 
 `get_capabilities` reports implementation, configuration, and live verification
 separately. No live Intervals account verification is claimed by fixture tests;
@@ -547,6 +612,14 @@ final outcome. `get_write_status` is local-only by default; `reconcile=true`
 performs read-only verification and never sends a mutation.
 Workout dates carry an explicit IANA timezone and default to `Europe/Warsaw`.
 
+Structured workout read-back compares the prescribed values, units, ranges and
+target modes for power, heart rate, pace and cadence, including nested repeats.
+A change from `50 %ftp` to `999 w` returns `mismatch` with exact
+`workout_doc.steps[...]` difference paths. API-derived target metadata is not
+compared as a prescription, and equivalent numeric `50`/`50.0` values are
+accepted. Booleans are not accepted as matching numbers. `checked_fields`
+reports the step tree and total duration when those checks were performed.
+
 `INTERVALS_ACCESS_MODE=admin` exposes legacy and safe writes, `coach` exposes
 only the safe write surface, and `readonly` hides mutation tools while retaining
 `get_write_status` and `get_analysis_comment_status`. Live account verification is not implied by
@@ -557,7 +630,7 @@ reconciliation.
 
 One declared catalogue supplies registration, access modes and the exhaustive
 `get_capabilities.data.tool_catalogue`. The running server resolves its mode at
-startup: admin exposes 32 tools, coach 24, readonly 22. An invalid mode falls back
+startup: admin exposes 34 tools, coach 26, readonly 24. An invalid mode falls back
 to readonly. Changing the environment requires a new server instance. Each entry
 describes upstream and local effects; readonly prohibits upstream mutations,
 while artifact export and journal reconciliation can still write local files.

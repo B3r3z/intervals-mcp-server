@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -272,7 +273,44 @@ def external_id_for_session(session_uid: str, namespace: str | None = None) -> s
     return f"{value}:{hashlib.sha256(session_uid.encode()).hexdigest()}"
 
 
+class _OperationRecord(BaseModel):
+    """One validated interpretation of an existing version-1 workout record."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_version: Literal["1.0"]
+    account: str
+    decision_uid: str | None
+    intent_fingerprint: str
+    intent: OperationIntent
+    result: OperationResult
+    created_at: str
+    updated_at: str
+
+    @model_validator(mode="after")
+    def consistent_history(self) -> "_OperationRecord":
+        if any(
+            getattr(self.result, field) != getattr(self.intent, field)
+            for field in ("operation_uid", "session_uid", "action")
+        ):
+            raise ValueError("result identity does not match intent")
+        expected = intent_fingerprint(self.account, self.decision_uid or "", self.intent)
+        if self.intent_fingerprint != expected:
+            raise ValueError("stored intent fingerprint does not match intent")
+        if self.result.intent_fingerprint not in {None, expected}:
+            raise ValueError("result fingerprint does not match intent")
+        if self.result.expected_fingerprint not in {None, self.intent.expected_fingerprint}:
+            raise ValueError("result expected fingerprint does not match intent")
+        return self
+
+
 class OperationJournal:
+    """Own record validation, identity binding and durable history preservation.
+
+    Existing version-1 files remain readable. Callers use validated records;
+    saving returns the persisted result without modifying their input model.
+    The account lock remains the responsibility of the write operation.
+    """
+
     def __init__(self, account: str, directory: str | Path | None = None):
         self.account = account
         self.directory = Path(
@@ -286,23 +324,14 @@ class OperationJournal:
 
     def save(
         self, intent: OperationIntent, result: OperationResult, decision_uid: str | None = None
-    ) -> None:
+    ) -> OperationResult:
         now = datetime.now(timezone.utc).isoformat()
         target = self._path(intent.operation_uid)
-        created_at = now
-        prior_result: dict[str, Any] = {}
-        if target.exists():
-            try:
-                prior = json.loads(target.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                raise JournalCorruptError(
-                    f"unreadable operation journal: {target.name}"
-                ) from exc
-            if not isinstance(prior, dict) or prior.get("account") != self.account:
-                raise JournalCorruptError(f"invalid operation journal: {target.name}")
-            created_at = prior.get("created_at", now)
-            if isinstance(prior.get("result"), dict):
-                prior_result = prior["result"]
+        prior = self.load(intent.operation_uid)
+        fingerprint = intent_fingerprint(self.account, decision_uid or "", intent)
+        if prior is not None and prior.intent_fingerprint != fingerprint:
+            raise JournalCorruptError("an existing operation cannot be rebound to another intent")
+        prior_result = prior.result.model_dump(mode="json") if prior is not None else {}
         result_data = result.model_dump(mode="json")
         for field in (
             "prepared_at",
@@ -315,18 +344,18 @@ class OperationJournal:
         ):
             if result_data.get(field) is None and prior_result.get(field) is not None:
                 result_data[field] = prior_result[field]
-                setattr(result, field, prior_result[field])
         payload = {
             "schema_version": "1.0",
             "account": self.account,
             "decision_uid": decision_uid,
-            "intent_fingerprint": intent_fingerprint(self.account, decision_uid or "", intent),
+            "intent_fingerprint": fingerprint,
             "intent": intent.model_dump(mode="json"),
             "result": result_data,
-            "created_at": created_at,
+            "created_at": prior.created_at if prior is not None else now,
             "updated_at": now,
         }
-        raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        record = self._decode(payload, target)
+        raw = json.dumps(record.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
         fd, temp = tempfile.mkstemp(dir=self.directory, prefix=".journal-")
         try:
             with os.fdopen(fd, "wb") as handle:
@@ -337,37 +366,64 @@ class OperationJournal:
         finally:
             if os.path.exists(temp):
                 os.unlink(temp)
+        return record.result
 
-    def load(self, uid: str) -> dict[str, Any] | None:
-        path = self._path(uid)
-        if not path.exists():
-            return None
+    def _read(self, path: Path) -> dict[str, Any] | None:
         try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except (OSError, UnicodeError) as exc:
             raise JournalCorruptError(f"unreadable operation journal: {path.name}") from exc
-        if not isinstance(record, dict) or record.get("account") != self.account:
+        try:
+            record = json.loads(raw)
+        except (ValueError, RecursionError) as exc:
+            raise JournalCorruptError(f"unreadable operation journal: {path.name}") from exc
+        if not isinstance(record, dict):
             raise JournalCorruptError(f"invalid operation journal: {path.name}")
         return record
 
-    def iter_records(self):
-        for path in sorted(self.directory.glob("*.json")):
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                raise JournalCorruptError(
-                    f"unreadable operation journal: {path.name}"
-                ) from exc
-            if not isinstance(record, dict):
-                raise JournalCorruptError(f"invalid operation journal: {path.name}")
-            if record.get("account") == self.account:
-                yield record
+    def _decode(self, payload: dict[str, Any], path: Path) -> _OperationRecord:
+        try:
+            record = _OperationRecord.model_validate(payload)
+        except (ValueError, RecursionError) as exc:
+            raise JournalCorruptError(f"invalid operation journal: {path.name}") from exc
+        if record.account != self.account or self._path(record.intent.operation_uid) != path:
+            raise JournalCorruptError(f"operation journal identity does not match: {path.name}")
+        return record
 
-    def find_by_session(self, session_uid: str) -> list[dict[str, Any]]:
+    def load(self, uid: str) -> _OperationRecord | None:
+        path = self._path(uid)
+        payload = self._read(path)
+        return self._decode(payload, path) if payload is not None else None
+
+    def iter_records(self) -> Iterator[_OperationRecord]:
+        for path in sorted(self.directory.glob("*.json")):
+            payload = self._read(path)
+            if payload is None:
+                raise JournalCorruptError(f"operation journal disappeared: {path.name}")
+            # Another account's nested models do not affect this account's writes.
+            if payload.get("account") == self.account:
+                yield self._decode(payload, path)
+            else:
+                # An edited account field cannot hide this account's history.
+                # Check the on-disk identity before trusting a foreign label;
+                # genuinely foreign nested records remain outside our scope.
+                for field in ("intent", "result"):
+                    nested = payload.get(field)
+                    uid = nested.get("operation_uid") if isinstance(nested, dict) else None
+                    if isinstance(uid, str) and self._path(uid) == path:
+                        raise JournalCorruptError(
+                            f"operation journal account does not match: {path.name}"
+                        )
+                if not isinstance(payload.get("account"), str):
+                    raise JournalCorruptError(f"invalid operation journal account: {path.name}")
+
+    def find_by_session(self, session_uid: str) -> list[_OperationRecord]:
         return [
             record
             for record in self.iter_records()
-            if record.get("intent", {}).get("session_uid") == session_uid
+            if record.intent.session_uid == session_uid
         ]
 
 

@@ -152,8 +152,10 @@ async def test_original_six_call_replay_has_additive_source_flags() -> None:
             ),
         )
 
-    assert totals(current) == (6, 6, 11203, 20740)
-    assert totals(source_replay) == (6, 6, 11203, 20740)
+    # The existing TymeBreathRate fixture now includes conditional respiratory
+    # documentation. It adds bytes, but no MCP calls or upstream requests.
+    assert totals(current) == (6, 6, 13592, 25345)
+    assert totals(source_replay) == (6, 6, 13592, 25345)
     assert current["baseline_only"] is True
     assert source_replay["baseline_only"] is True
 

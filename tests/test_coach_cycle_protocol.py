@@ -68,13 +68,60 @@ async def _coach(directory: Path, *, mode: str = "coach", lose_ack: bool = False
 
 
 @pytest.mark.asyncio
+async def test_coach_read_quality_and_window_over_stdio(tmp_path: Path) -> None:
+    state = initial_state()
+    state["paired_event_id"] = None
+    (tmp_path / "account.json").write_text(json.dumps(state), encoding="utf-8")
+    async with _coach(tmp_path, mode="readonly") as coach:
+        capabilities = (await coach.call("get_capabilities"))["data"]
+        assert len(coach.schemas) == 24
+        assert capabilities["server"]["live_verified"] is False
+        assert {row["name"] for row in capabilities["tool_catalogue"]} == set(coach.schemas)
+        streams = await coach.call("get_activity_streams", activity_id="cycle-activity",
+                                   mode="range", start_index=0, end_index=4,
+                                   stream_types="time,watts,heartrate")
+        assert streams["status"] == "ok" and streams["data"]["alignment"]["quality"] == "aligned"
+        quality = await coach.call("get_activity_data_quality", activity_id="cycle-activity")
+        assert quality["status"] == "ok"
+        assert quality["data"]["stream_quality"]["time_axis"]["unrepresented_seconds_vs_1hz"] == 3
+        assert quality["data"]["activity_metadata"]["recording_stops"] == 1
+        curves = await coach.call("get_activity_power_curves", activity_id="cycle-activity",
+                                  durations=[5], fatigue=["normal", "kj0"])
+        assert curves["status"] == "partial"
+        assert curves["data"]["curves"][0]["data_points"][0]["watts"] == 250
+        assert curves["data"]["selector_results"][1]["error"]["http_status"] == 422
+        context = await coach.call("get_session_context", activity_id="cycle-activity",
+                                   sections=["plan", "wellness", "activities", "contextual_events"],
+                                   context_days_before=2, context_days_after=1)
+        sections = context["data"]["sections"]
+        assert all(section["status"] == "ok" for section in sections.values())
+        assert sections["plan"]["availability"] == "unpaired"
+        assert sections["contextual_events"]["data"][0]["id"] == 90
+        assert sections["activities"]["data"][0]["icu_training_load"] == 0
+        plot = await coach.call("get_activity_power_hr", activity_id="cycle-activity")
+        assert plot["status"] == "partial" and len(plot["data"]["series"]) == 120
+        follow_up = plot["projection"]["full_read"]
+        full = await coach.call(follow_up["tool"], **follow_up["parameters"])
+        assert full["status"] == "ok" and len(full["data"]["series"]) == 125
+        assert full["data"]["decoupling"] == 0 and full["data"]["hrLag"] == 30
+    requests = _state(tmp_path)["requests"]
+    assert all(row["method"] == "GET" for row in requests)
+    windows = [row["query"] for row in requests if "oldest" in row["query"]]
+    assert len(windows) == 3
+    assert all(row["newest"].startswith("2026-09-09") for row in windows)
+    assert sum(row["oldest"] == "0001-01-01" for row in windows) == 1
+    assert sum(row["oldest"].startswith("2026-09-06") for row in windows) == 2
+    assert _state(tmp_path)["messages"] == [] and _state(tmp_path)["events"] == state["events"]
+
+
+@pytest.mark.asyncio
 async def test_coach_cycle_session_plan_comment_history_and_verified_workout(tmp_path: Path) -> None:
     async with _coach(tmp_path) as coach:
         capabilities = (await coach.call("get_capabilities"))["data"]
         assert capabilities["server"]["mode"] == "coach"
         assert capabilities["server"]["live_verified"] is False
         assert {row["name"] for row in capabilities["tool_catalogue"]} == set(coach.schemas)
-        assert len(coach.schemas) == 24 and "add_activity_message" not in coach.schemas
+        assert len(coach.schemas) == 26 and "add_activity_message" not in coach.schemas
 
         context = await coach.call("get_session_context", activity_id="cycle-activity", sections=["details", "intervals", "plan", "comments"])
         sections = context["data"]["sections"]
@@ -134,7 +181,7 @@ async def test_lost_ack_survives_restart_and_readonly_reconciliation_without_rep
 
     async with _coach(tmp_path, mode="readonly") as readonly:
         assert "publish_analysis_comment" not in readonly.schemas
-        assert len(readonly.schemas) == 22
+        assert len(readonly.schemas) == 24
         status = await readonly.call("get_analysis_comment_status", analysis_uid="lost-v1", reconcile=True)
         assert status["historical_result"]["outcome"] == "unknown"
         assert status["reconciliation_result"]["code"] == "MESSAGE_ID_UNAVAILABLE"

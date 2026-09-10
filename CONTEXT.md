@@ -22,3 +22,12 @@ The declared set of operations available for coach scenarios in each access mode
 
 **Power curve**:
 A source-provided series relating effort duration to power, together with the activity, period or prior-work context supplied by Intervals.icu.
+
+**Workout operation**:
+One identified request to create, update or delete a planned cycling or strength session. Repeating the same operation refers to its original intent and recorded outcome.
+
+**Activity interval evidence**:
+Source-provided records describing segments of a completed activity and their groups. Missing records, a null group container and an empty list are distinct source facts.
+
+**Activity export**:
+A collected set of stream and interval evidence for one completed activity. Its parts can describe different source observations; collecting them does not establish that they were captured at one instant.

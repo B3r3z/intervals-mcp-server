@@ -26,6 +26,7 @@ from intervals_mcp_server.contracts import (
     upstream_failure,
 )
 from intervals_mcp_server.utils.ranges import range_query, validate_range
+from intervals_mcp_server.calendar_events import EARLIEST_EVENT_DATE, select_overlapping_events
 
 config = get_config()
 
@@ -411,8 +412,9 @@ def _event_error(value: Any, resource: str) -> ReadResponse[Any] | None:
 async def get_events(athlete_id: str | None = None, api_key: str | None = None,
                      start_date: str | None = None, end_date_exclusive: str | None = None,
                      timezone: str = "Europe/Warsaw", end_date: str | None = None,
-                     resolve: StrictBool = False) -> ReadResponse[list[dict[str, Any]]]:
-    """Return calendar events in a half-open local-date range.
+                     resolve: StrictBool = False,
+                     include_overlapping: StrictBool = True) -> ReadResponse[list[dict[str, Any]]]:
+    """Return calendar events overlapping a half-open local-date range.
 
     ``start_date`` is inclusive and ``end_date_exclusive`` is exclusive;
     ``end_date`` remains the deprecated inclusive alias.  A valid empty list
@@ -422,7 +424,22 @@ async def get_events(athlete_id: str | None = None, api_key: str | None = None,
     prove that the returned list is complete, so source completeness remains
     unknown. Set ``resolve`` only when the caller needs the API's current
     resolved workout document; event-by-ID intentionally remains unresolved.
+
+    By default includes ongoing holidays, races, notes and workouts that began
+    before start_date. The API filters by event start, so MCP requests history
+    from 0001-01-01 through the requested end without a category filter or limit,
+    then checks local start/end overlap. End dates are exclusive. This can fetch
+    more history than the returned selection; query.upstream_oldest and overlap
+    report its scope. Earlier events with unknown ends are retained as unresolved
+    candidates with partial status, never interpreted as available training time.
+    Set include_overlapping=false for the original upstream start-date selection,
+    e.g. resolving an already identified event on its exact start day.
     """
+    if not isinstance(include_overlapping, bool):
+        return failure(
+            resource="events", code="INVALID_INCLUDE_OVERLAPPING",
+            message="include_overlapping must be a boolean", phase="validation",
+        )
     if not isinstance(resolve, bool):
         return failure(
             resource="events",
@@ -439,7 +456,8 @@ async def get_events(athlete_id: str | None = None, api_key: str | None = None,
     start, exclusive, tz, deprecated = checked
     from datetime import date, timedelta
     newest = (date.fromisoformat(exclusive) - timedelta(days=1)).isoformat()
-    params: dict[str, Any] = {"oldest": start, "newest": newest}
+    upstream_oldest = EARLIEST_EVENT_DATE if include_overlapping else start
+    params: dict[str, Any] = {"oldest": upstream_oldest, "newest": newest}
     if resolve:
         params["resolve"] = True
     result = await make_intervals_request(
@@ -455,19 +473,35 @@ async def get_events(athlete_id: str | None = None, api_key: str | None = None,
             athlete_id=aid,
         )
     rows = [dict(row) for row in result]
+    overlap = None
+    unresolved = False
+    if include_overlapping:
+        rows, overlap = select_overlapping_events(rows, start, exclusive)
+        unresolved = bool(overlap["unresolved_records"])
     rows.sort(key=lambda row: (str(row.get("start_date_local", row.get("date", ""))), str(row.get("id", ""))))
     warnings = ["DEPRECATED_END_DATE"] if deprecated else []
     query: dict[str, Any] = range_query(start, exclusive, tz, timezone)
+    query["upstream_oldest"] = upstream_oldest
     query["upstream_newest"] = newest
     query["resolve"] = resolve
-    return success(
+    query["include_overlapping"] = include_overlapping
+    reasons = ["upstream_completeness_unverified"]
+    if unresolved:
+        warnings.append("EVENT_OVERLAP_UNRESOLVED")
+        reasons.append("EVENT_OVERLAP_UNRESOLVED")
+    response = success(
         rows,
         resource="events",
         athlete_id=aid,
         query=query,
         warnings=warnings,
-        coverage={"source_complete_within_query": None, "reasons": ["upstream_completeness_unverified"]},
+        coverage={"source_complete_within_query": None, "response_complete": not unresolved,
+                  "reasons": reasons},
+        **({"overlap": overlap} if overlap is not None else {}),
     )
+    if unresolved:
+        response.status = "partial"
+    return response
 
 
 @coach_tool(access="read", upstream="read", local="none")

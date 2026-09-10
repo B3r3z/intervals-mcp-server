@@ -81,7 +81,9 @@ from intervals_mcp_server.tools.metrics import get_metric_definitions as get_met
 from intervals_mcp_server.tools.analytics import (  # pylint: disable=wrong-import-position  # noqa: E402
     get_activity_best_efforts as get_activity_best_efforts,
     get_activity_interval_stats as get_activity_interval_stats,
+    get_activity_power_hr as get_activity_power_hr,
 )
+from intervals_mcp_server.tools.quality import get_activity_data_quality as get_activity_data_quality  # noqa: E402
 from intervals_mcp_server.tools.capabilities import get_capabilities as get_capabilities  # pylint: disable=wrong-import-position  # noqa: E402
 from intervals_mcp_server.tools.artifacts import get_artifact_chunk as get_artifact_chunk  # pylint: disable=wrong-import-position  # noqa: E402
 from intervals_mcp_server.tools.session_context import get_session_context as get_session_context  # pylint: disable=wrong-import-position  # noqa: E402
